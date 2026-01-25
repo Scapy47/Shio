@@ -17,19 +17,20 @@ struct Args {
 //     body: String,
 // }
 
-fn main() {
+fn main() -> Result<(), ureq::Error> {
     let args = Args::parse();
     println!("This is the start of {}!!", args.name);
-    net_hello();
+    net_hello()?;
+    Ok(())
 }
 
-fn net_hello() {
-    let res = ureq::get("https://jsonplaceholder.typicode.com/posts/1")
+fn net_hello() -> Result<(), ureq::Error> {
+    let res = ureq::get("https://jsonplaceholder.typicode.com/posts/")
         .header("Accept", "application/json")
-        .call()
-        .unwrap()
-        .status()
-        .to_string();
+        .call()?
+        .body_mut()
+        .read_to_string()?;
 
     println!("{res}");
+    Ok(())
 }

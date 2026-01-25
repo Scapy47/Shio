@@ -1,8 +1,17 @@
-use std::{collections::HashMap, time::Duration};
-
 use clap::Parser;
+use ratatui::{
+    DefaultTerminal, Frame,
+    crossterm::{
+        self,
+        // event::{self, Event},
+    },
+    layout::HorizontalAlignment,
+    style::Style,
+    widgets::{Block, BorderType},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::{collections::HashMap, time::Duration};
 use ureq::{self, Agent};
 
 #[derive(Parser, Debug)]
@@ -56,7 +65,7 @@ struct ApiResponse {
 }
 
 fn search_anime(agent: &Agent, query: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let search_gql: &str = r#"
+    let search_gql = r#"
     query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
         shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) {
             edges {
@@ -103,31 +112,59 @@ fn search_anime(agent: &Agent, query: &str) -> Result<(), Box<dyn std::error::Er
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        // ACCESSING the fields here silences the warnings
         println!(
             "ID: {}\tName: {} ({} episodes)",
-            anime.id,   // Reads 'id'
-            anime.name, // Reads 'name'
-            ep_count    // Reads 'available_episodes'
+            anime.id, anime.name, ep_count
         );
     }
 
     Ok(())
 }
 
-fn main() {
+fn main() -> color_eyre::eyre::Result<()> {
+    color_eyre::install()?;
     let args = Args::parse();
 
     let config = Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(12)))
+        .timeout_per_call(Some(Duration::from_secs(12)))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0")
         .https_only(true)
         .build();
 
     let client = Agent::new_with_config(config);
 
-    // println!("This is the start of {}!!", args.name);
     if let Err(e) = search_anime(&client, &args.name) {
         eprintln!("Error: {}", e);
     }
+    ratatui::run(app)?;
+    Ok(())
+}
+
+fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
+    loop {
+        terminal.draw(render)?;
+        // if let Event::Key(key) = event::read()? {
+        //     match key.code {
+        //         event::KeyCode::Esc => {
+        //             break Ok(());
+        //         }
+        //         _ => (),
+        //     }
+        // }
+        if crossterm::event::read()?.is_key_press() {
+            break Ok(());
+        }
+    }
+}
+
+fn render(frame: &mut Frame) {
+    let outer_area = frame.area();
+
+    let outer_block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().red())
+        .title("shio")
+        .title_alignment(HorizontalAlignment::Center);
+
+    frame.render_widget(outer_block, outer_area);
 }

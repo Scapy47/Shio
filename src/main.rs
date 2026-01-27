@@ -1,7 +1,6 @@
 use clap::Parser;
 use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::{self},
+    DefaultTerminal, Frame, crossterm,
     layout::{Constraint, Direction, HorizontalAlignment, Layout},
     style::Style,
     widgets::{Block, BorderType, Paragraph, Row, Table},
@@ -9,7 +8,7 @@ use ratatui::{
 use serde::Deserialize;
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
-use ureq::{self, Agent};
+use ureq::Agent;
 
 use crate::utils::decrypt_url;
 
@@ -19,6 +18,10 @@ mod utils;
 struct Args {
     #[arg()]
     name: String,
+    #[arg(long, default_value_t = false)]
+    debug: bool,
+    #[arg(long)]
+    user_agent: String,
 }
 
 // Output Structures
@@ -57,6 +60,7 @@ struct SourceUrl {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct EpisodeData {
+    episode_string: String,
     source_urls: Vec<SourceUrl>,
 }
 
@@ -102,7 +106,12 @@ fn search_anime(agent: &Agent, query: &str) -> Result<ApiResponse, Box<dyn std::
     Ok(parsed)
 }
 
-fn get_episode_links(agent: &Agent, id: &str, ep: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn get_episode_links(
+    agent: &Agent,
+    id: &str,
+    ep: &str,
+    debug: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let episode_embed_gql = r#"
     query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}
     "#;
@@ -133,7 +142,6 @@ fn get_episode_links(agent: &Agent, id: &str, ep: &str) -> Result<(), Box<dyn st
         } else if encrypted_url.starts_with("//") {
             &format!("http:{}", &encrypted_url)
         } else {
-            println!("raw (without decrypt_url): {}", &encrypted_url);
             encrypted_url
         };
 
@@ -149,17 +157,40 @@ fn get_episode_links(agent: &Agent, id: &str, ep: &str) -> Result<(), Box<dyn st
             uri
         };
 
-        println!("\n--- Found Provider: {} ---", provider_name);
-        println!("uris:\t{}", uri);
+        if debug {
+            println!("\n--- Found Provider: {} ---", provider_name);
+            println!("\tepisode:  {}", parsed.data.episode.episode_string);
+            println!("\turi:      {}", uri);
+            println!("\traw-uri:  {}\n", encrypted_url)
+        }
     }
 
     Ok(())
 }
 
+fn get_episode_list(agent: &Agent, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let episode_search_gql =
+        "query($showId:String!){show(_id:$showId){_id availableEpisodesDetail}}";
+
+    let base_api = "https://api.allanime.day/api";
+    let referer = "https://allmanga.to";
+
+    let response = agent
+        .get(base_api)
+        .header("Referer", referer)
+        .query("variables", &format!(r#"{{"showId":"{}"}}"#, id))
+        .query("query", episode_search_gql)
+        .call()?;
+
+    let res_str = response.into_body().read_to_string()?;
+    println!("{}", res_str);
+    Ok(())
+}
+
 fn main() -> color_eyre::eyre::Result<()> {
     color_eyre::install()?;
-    // let args = Args::parse();
-    //
+    let args = Args::parse();
+
     let config = Agent::config_builder()
         .timeout_per_call(Some(Duration::from_secs(12)))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0")
@@ -186,7 +217,10 @@ fn main() -> color_eyre::eyre::Result<()> {
     //     );
     // }
     //
-    if let Err(e) = get_episode_links(&client, "vDTSJHSpYnrkZnAvG", "1") {
+    if let Err(e) = get_episode_links(&client, "HM5zSCbGwSAsWPFjX", "1", args.debug) {
+        eprintln!("error: {}", e);
+    }
+    if let Err(e) = get_episode_list(&client, "HM5zSCbGwSAsWPFjX") {
         eprintln!("error: {}", e);
     }
 
@@ -224,7 +258,6 @@ fn render(frame: &mut Frame) {
     let mut row = vec![];
     let resp = search_anime(&client, &args.name).unwrap();
     for anime in resp.data.shows.edges {
-        // Calculate episode count
         let ep_count = anime
             .available_episodes
             .get("sub")

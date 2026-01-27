@@ -8,11 +8,10 @@ use ratatui::{
 use serde::Deserialize;
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
-use ureq::Agent;
-
-use crate::utils::decrypt_url;
+use ureq::{Agent, RequestBuilder, typestate::WithoutBody};
 
 mod utils;
+use crate::utils::decrypt_url;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -20,11 +19,11 @@ struct Args {
     name: String,
     #[arg(long, default_value_t = false)]
     debug: bool,
-    #[arg(long)]
-    user_agent: String,
+    // #[arg(long)]
+    // user_agent: String,
 }
 
-// Output Structures
+//  NOTE: Response from search_anime
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct AnimeEdge {
@@ -32,6 +31,8 @@ struct AnimeEdge {
     id: String,
     name: String,
     available_episodes: HashMap<String, Value>,
+    #[serde(rename = "__typename")]
+    typename: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -45,11 +46,11 @@ struct DataWrapper {
 }
 
 #[derive(Deserialize, Debug)]
-struct ApiResponse {
+struct SearchResponse {
     data: DataWrapper,
 }
 
-// 3. Structs for Response
+//  NOTE: Response for get_episode_links
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct SourceUrl {
@@ -74,153 +75,127 @@ struct EpisodeResponse {
     data: EpisodeDataWrapper,
 }
 
-fn search_anime(agent: &Agent, query: &str) -> Result<ApiResponse, Box<dyn std::error::Error>> {
-    let search_gql = r#"
-    query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
-        shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) {
-            edges {
-                _id
-                name
-                availableEpisodes
+#[derive(Debug)]
+struct Api {
+    base_api: String,
+    referer: String,
+    agent: Agent,
+}
+
+impl Api {
+    fn new() -> Self {
+        let config = Agent::config_builder()
+            .timeout_per_call(Some(Duration::from_secs(12)))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0")
+            .https_only(true)
+            .build();
+        let agent = Agent::new_with_config(config);
+
+        Api {
+            base_api: "https://api.allanime.day/api".to_string(),
+            referer: "https://allmanga.to".to_string(),
+            agent: agent,
+        }
+    }
+
+    fn request_api(&self, variables: String, gql: String) -> RequestBuilder<WithoutBody> {
+        self.agent
+            .get(&self.base_api)
+            .header("Referer", &self.referer)
+            .query("variables", variables)
+            .query("query", gql)
+    }
+
+    fn search_anime(&self, query: &str) -> Result<SearchResponse, Box<dyn std::error::Error>> {
+        let gql = "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } }}".to_string();
+
+        let variables_json = format!(
+            r#"{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{}"}},"limit":40,"page":1,"translationType":"{}","countryOrigin":"ALL"}}"#,
+            query,
+            "sub" // TODO:
+        );
+
+        let resp = self.request_api(variables_json, gql).call()?;
+        let parsed: SearchResponse = resp.into_body().read_json()?;
+
+        Ok(parsed)
+    }
+    fn get_episode_links(
+        &self,
+        id: &str,
+        ep: &str,
+        debug: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let gql = "query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}".to_string();
+
+        let variables_json = format!(
+            r#"{{"showId":"{}","translationType":"{}","episodeString":"{}"}}"#,
+            id,
+            "sub", //TODO:
+            ep
+        );
+        let resp = self.request_api(variables_json, gql).call()?;
+        let parsed: EpisodeResponse = resp.into_body().read_json()?;
+
+        for source in parsed.data.episode.source_urls {
+            let provider_name = &source.source_name;
+            let encrypted_url = &source.source_url;
+
+            let uri = if encrypted_url.starts_with("--") {
+                &decrypt_url(&encrypted_url[2..])
+            } else if encrypted_url.starts_with("//") {
+                &format!("http:{}", &encrypted_url)
+            } else {
+                encrypted_url
+            };
+
+            let uri = if uri.contains("/clock") && !uri.contains("/clock.json") {
+                &uri.replace("/clock", "/clock.json")
+            } else {
+                uri
+            };
+
+            let uri = if uri.starts_with("/apivtwo/") {
+                &format!("https://allanime.day{}", uri)
+            } else {
+                uri
+            };
+
+            if debug {
+                println!("\n--- Found Provider: {} ---", provider_name);
+                println!("\tepisode:  {}", parsed.data.episode.episode_string);
+                println!("\turi:      {}", uri);
+                println!("\traw-uri:  {}", encrypted_url)
             }
         }
+
+        Ok(())
     }
-    "#;
-    let base_api = "https://api.allanime.day/api";
-    let referer = "https://allmanga.to";
+    fn get_episode_list(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let gql =
+            "query ($showId: String!) { show( _id: $showId ) { _id availableEpisodesDetail }}"
+                .to_string();
+        let variables_json = format!(r#"{{"showId":"{}"}}"#, id);
 
-    let variables_json = format!(
-        r#"{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{}"}},"limit":40,"page":1,"translationType":"{}","countryOrigin":"ALL"}}"#,
-        query, "sub"
-    );
+        let resp = self.request_api(variables_json, gql).call()?;
+        // let parsed: EpisodeResponse = resp.into_body().read_json()?;
+        let res_str = resp.into_body().read_to_string()?;
+        println!("\n{}", res_str);
 
-    let response = agent
-        .get(base_api)
-        .header("Referer", referer)
-        .query("variables", &variables_json)
-        .query("query", search_gql)
-        .call()?;
-
-    let parsed: ApiResponse = response.into_body().read_json()?;
-
-    Ok(parsed)
-}
-
-fn get_episode_links(
-    agent: &Agent,
-    id: &str,
-    ep: &str,
-    debug: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let episode_embed_gql = r#"
-    query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}
-    "#;
-    let base_api = "https://api.allanime.day/api";
-    let referer = "https://allmanga.to";
-
-    let response = agent
-        .get(base_api)
-        .header("Referer", referer)
-        .query(
-            "variables",
-            format!(
-                r#"{{"showId":"{}","translationType":"{}","episodeString":"{}"}}"#,
-                id, "sub", ep
-            ),
-        )
-        .query("query", &episode_embed_gql)
-        .call()?;
-
-    let parsed: EpisodeResponse = response.into_body().read_json()?;
-
-    for source in parsed.data.episode.source_urls {
-        let provider_name = &source.source_name;
-        let encrypted_url = &source.source_url;
-
-        let uri = if encrypted_url.starts_with("--") {
-            &decrypt_url(&encrypted_url[2..])
-        } else if encrypted_url.starts_with("//") {
-            &format!("http:{}", &encrypted_url)
-        } else {
-            encrypted_url
-        };
-
-        let uri = if uri.contains("/clock") && !uri.contains("/clock.json") {
-            &uri.replace("/clock", "/clock.json")
-        } else {
-            uri
-        };
-
-        let uri = if uri.starts_with("/apivtwo/") {
-            &format!("https://allanime.day{}", uri)
-        } else {
-            uri
-        };
-
-        if debug {
-            println!("\n--- Found Provider: {} ---", provider_name);
-            println!("\tepisode:  {}", parsed.data.episode.episode_string);
-            println!("\turi:      {}", uri);
-            println!("\traw-uri:  {}\n", encrypted_url)
-        }
+        Ok(())
     }
-
-    Ok(())
-}
-
-fn get_episode_list(agent: &Agent, id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let episode_search_gql =
-        "query($showId:String!){show(_id:$showId){_id availableEpisodesDetail}}";
-
-    let base_api = "https://api.allanime.day/api";
-    let referer = "https://allmanga.to";
-
-    let response = agent
-        .get(base_api)
-        .header("Referer", referer)
-        .query("variables", &format!(r#"{{"showId":"{}"}}"#, id))
-        .query("query", episode_search_gql)
-        .call()?;
-
-    let res_str = response.into_body().read_to_string()?;
-    println!("{}", res_str);
-    Ok(())
 }
 
 fn main() -> color_eyre::eyre::Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
 
-    let config = Agent::config_builder()
-        .timeout_per_call(Some(Duration::from_secs(12)))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0")
-        .https_only(true)
-        .build();
+    let api = Api::new();
 
-    let client = Agent::new_with_config(config);
-
-    // let resp = search_anime(&client, &args.name).unwrap();
-
-    // println!("Found {} results:", resp.data.shows.edges.len());
-    //
-    // for anime in resp.data.shows.edges {
-    //     // Calculate episode count
-    //     let ep_count = anime
-    //         .available_episodes
-    //         .get("sub")
-    //         .and_then(|v| v.as_u64())
-    //         .unwrap_or(0);
-    //
-    //     println!(
-    //         "ID: {}\tName: {} ({} episodes)",
-    //         anime.id, anime.name, ep_count
-    //     );
-    // }
-    //
-    if let Err(e) = get_episode_links(&client, "HM5zSCbGwSAsWPFjX", "1", args.debug) {
+    if let Err(e) = api.get_episode_links("HM5zSCbGwSAsWPFjX", "1", args.debug) {
         eprintln!("error: {}", e);
     }
-    if let Err(e) = get_episode_list(&client, "HM5zSCbGwSAsWPFjX") {
+    if let Err(e) = api.get_episode_list("HM5zSCbGwSAsWPFjX") {
         eprintln!("error: {}", e);
     }
 
@@ -247,16 +222,11 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 
 fn render(frame: &mut Frame) {
     let args = Args::parse();
-    let config = Agent::config_builder()
-        .timeout_per_call(Some(Duration::from_secs(12)))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0")
-        .https_only(true)
-        .build();
 
-    let client = Agent::new_with_config(config);
+    let api = Api::new();
 
     let mut row = vec![];
-    let resp = search_anime(&client, &args.name).unwrap();
+    let resp = api.search_anime(&args.name).unwrap();
     for anime in resp.data.shows.edges {
         let ep_count = anime
             .available_episodes
@@ -264,7 +234,12 @@ fn render(frame: &mut Frame) {
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        row.push(Row::new(vec![ep_count.to_string(), anime.name, anime.id]));
+        row.push(Row::new(vec![
+            ep_count.to_string(),
+            anime.name,
+            anime.id,
+            anime.typename,
+        ]));
     }
 
     row.insert(
@@ -292,8 +267,9 @@ fn render(frame: &mut Frame) {
             row,
             [
                 Constraint::Percentage(20),
-                Constraint::Percentage(60),
+                Constraint::Percentage(55),
                 Constraint::Percentage(20),
+                Constraint::Percentage(5),
             ],
         )
         .block(Block::bordered()),

@@ -1,8 +1,12 @@
 use clap::Parser;
+use nucleo_matcher::{
+    Config, Matcher,
+    pattern::{AtomKind, CaseMatching, Normalization, Pattern},
+};
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event},
-    layout::{Constraint, Layout},
+    layout::{Constraint, HorizontalAlignment, Layout},
     style::Style,
     widgets::{Block, BorderType, Paragraph, Row, Table},
 };
@@ -207,6 +211,7 @@ struct App {
     api: Arc<Api>,
     search_resp: Option<SearchResponse>,
     exit: bool,
+    matcher: Matcher,
 }
 impl App {
     fn new() -> Self {
@@ -217,6 +222,7 @@ impl App {
             args: args,
             input: Input::default(),
             api: api,
+            matcher: Matcher::new(Config::DEFAULT),
             search_resp: None,
             exit: false,
         }
@@ -260,7 +266,9 @@ impl App {
 
         let input = Paragraph::new(self.input.value()).block(
             Block::bordered()
-                .title("Input")
+                .title("Search")
+                .title_style(Style::new().bold())
+                .title_alignment(HorizontalAlignment::Center)
                 .border_type(BorderType::Rounded)
                 .style(Style::new().green()),
         );
@@ -268,24 +276,43 @@ impl App {
 
         let rows = if let Some(resp) = &self.search_resp {
             let mut list = vec![];
-            list.insert(0, Row::new(vec!["Name", "id", "type", "number of ep"]));
-            for anime in &resp.data.shows.edges {
-                let ep_count = anime
+
+            let anime_vec = &resp.data.shows.edges;
+            let anime_name_vec: Vec<String> = anime_vec.iter().map(|e| e.name.clone()).collect();
+
+            let matches: Vec<&String> = Pattern::new(
+                &self.input.value(),
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+            )
+            .match_list(&anime_name_vec, &mut self.matcher)
+            .into_iter()
+            .map(|m| m.0)
+            .collect();
+
+            for i in 0..matches.len() {
+                let ep_count = anime_vec[i]
                     .available_episodes
                     .get("sub")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
 
                 list.push(Row::new(vec![
-                    anime.name.clone(),
-                    anime.id.clone(),
-                    anime.typename.clone(),
+                    matches[i].clone(),
+                    anime_vec[i].typename.clone(),
                     ep_count.to_string(),
+                    anime_vec[i].id.clone(),
                 ]));
             }
+            list.insert(
+                0,
+                Row::new(vec!["Name", "Type", "Episode", "Id"]).style(Style::new().bold().green()),
+            );
+
             list
         } else {
-            vec![Row::new(vec!["loading..."])]
+            vec![Row::new(vec!["Name", "Type", "Episode", "Id"])]
         };
 
         let block_left = Block::bordered()
@@ -297,10 +324,10 @@ impl App {
             Table::new(
                 rows,
                 [
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
+                    Constraint::Percentage(60),
+                    Constraint::Percentage(10),
+                    Constraint::Percentage(10),
+                    Constraint::Percentage(20),
                 ],
             ),
             block_left.inner(bottom_left),

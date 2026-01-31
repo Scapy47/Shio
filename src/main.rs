@@ -6,9 +6,9 @@ use nucleo_matcher::{
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event},
-    layout::{Constraint, HorizontalAlignment, Layout},
-    style::Style,
-    widgets::{Block, BorderType, Paragraph, Row, Table},
+    layout::{Constraint, HorizontalAlignment, Layout, Rect},
+    style::{Color, Style},
+    widgets::{Block, BorderType, Paragraph, Row, Table, TableState},
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -35,7 +35,7 @@ struct Args {
     // user_agent: String,
 }
 
-//  NOTE: Response from search_anime
+//  NOTE: Response from search_anime()
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct AnimeEdge {
@@ -62,7 +62,7 @@ struct SearchResponse {
     data: DataWrapper,
 }
 
-//  NOTE: Response for get_episode_links
+//  NOTE: Response for get_episode_links()
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct SourceUrl {
@@ -204,21 +204,29 @@ impl Api {
     }
 }
 
+#[derive(Debug, Default)]
+struct WidgetStates {
+    table: TableState,
+}
+
 #[derive(Debug)]
 struct App {
     args: Args,
     input: Input,
     api: Arc<Api>,
-    search_resp: Option<SearchResponse>,
+    search_resp: Option<Vec<AnimeEdge>>,
     exit: bool,
     matcher: Matcher,
+    widget_states: WidgetStates,
 }
+
 impl App {
     fn new() -> Self {
         let args = Args::parse();
         let api = Arc::new(Api::new());
 
-        App {
+        Self {
+            widget_states: WidgetStates::default(),
             args: args,
             input: Input::default(),
             api: api,
@@ -236,22 +244,123 @@ impl App {
         thread::spawn(move || tx.send(api_clone.search_anime(name).unwrap()));
 
         while !self.exit {
-            if let Ok(resp) = rx.recv() {
-                self.search_resp = Some(resp);
+            if let Ok(resp) = rx.try_recv() {
+                // let vec: Vec<String> = resp
+                //     .data
+                //     .shows
+                //     .edges
+                //     .iter()
+                //     .map(|e| e.name.clone())
+                //     .collect();
+                //
+                // let matches = Pattern::new(
+                //     &self.input.value(),
+                //     CaseMatching::Smart,
+                //     Normalization::Smart,
+                //     AtomKind::Fuzzy,
+                // )
+                // .match_list(vec, &mut self.matcher);
+
+                self.search_resp = Some(resp.data.shows.edges);
             }
 
             terminal.draw(|frame| self.render(frame))?;
-            let event = event::read()?;
-            if let Event::Key(key) = event {
-                match key.code {
-                    event::KeyCode::Esc => return Ok(()),
-                    _ => {
-                        self.input.handle_event(&event);
+
+            if event::poll(Duration::from_millis(16))? {
+                let event = event::read()?;
+                if let Event::Key(key) = event {
+                    match key.code {
+                        event::KeyCode::Esc => return Ok(()),
+                        event::KeyCode::Down => self.widget_states.table.select_next(),
+                        event::KeyCode::Up => self.widget_states.table.select_previous(),
+                        event::KeyCode::Enter => {
+                            if self.widget_states.table.selected() == Some(2) {
+                                self.exit = true
+                            }
+                        }
+                        _ => {
+                            self.input.handle_event(&event);
+                        }
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    fn render_search_input(&mut self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(
+            Paragraph::new(self.input.value()).block(
+                Block::bordered()
+                    .title("Search")
+                    .title_style(Style::new().bold())
+                    .title_alignment(HorizontalAlignment::Center)
+                    .border_type(BorderType::Rounded)
+                    .style(Style::new().green()),
+            ),
+            area,
+        );
+    }
+
+    fn render_search_result(&mut self, frame: &mut Frame, area: Rect) {
+        let search_resp_vec = if let Some(resp) = &self.search_resp {
+            resp
+        } else {
+            return;
+        };
+        let name_vec: Vec<String> = search_resp_vec.iter().map(|e| e.name.clone()).collect();
+
+        let matches: Vec<&String> = Pattern::new(
+            &self.input.value(),
+            CaseMatching::Smart,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        )
+        .match_list(&name_vec, &mut self.matcher)
+        .into_iter()
+        .map(|m| m.0)
+        .collect();
+
+        let mut rows = vec![];
+        for i in 0..matches.len() {
+            let ep_count = search_resp_vec[i]
+                .available_episodes
+                .get("sub")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            rows.push(Row::new(vec![
+                matches[i].clone(),
+                search_resp_vec[i].typename.clone(),
+                ep_count.to_string(),
+                search_resp_vec[i].id.clone(),
+            ]));
+        }
+
+        frame.render_stateful_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Percentage(60),
+                    Constraint::Percentage(10),
+                    Constraint::Percentage(10),
+                    Constraint::Percentage(20),
+                ],
+            )
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .title("Results")
+                    .title_alignment(HorizontalAlignment::Center),
+            )
+            .row_highlight_style(Style::new().bg(Color::LightBlue)),
+            area,
+            &mut self.widget_states.table,
+        );
+    }
+
+    fn render_side_menu(&mut self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(Paragraph::new(ASCII_ART).centered(), area);
     }
 
     fn render(&mut self, frame: &mut Frame) {
@@ -261,92 +370,9 @@ impl App {
         let [bottom_left, bottom_right] =
             Layout::horizontal([Constraint::Percentage(70), Constraint::Fill(1)]).areas(bottom);
 
-        let [bottom_right_top, bottom_right_bottom] =
-            Layout::vertical([Constraint::Percentage(50), Constraint::Fill(1)]).areas(bottom_right);
-
-        let input = Paragraph::new(self.input.value()).block(
-            Block::bordered()
-                .title("Search")
-                .title_style(Style::new().bold())
-                .title_alignment(HorizontalAlignment::Center)
-                .border_type(BorderType::Rounded)
-                .style(Style::new().green()),
-        );
-        frame.render_widget(input, top);
-
-        let rows = if let Some(resp) = &self.search_resp {
-            let mut list = vec![];
-
-            let anime_vec = &resp.data.shows.edges;
-            let anime_name_vec: Vec<String> = anime_vec.iter().map(|e| e.name.clone()).collect();
-
-            let matches: Vec<&String> = Pattern::new(
-                &self.input.value(),
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Fuzzy,
-            )
-            .match_list(&anime_name_vec, &mut self.matcher)
-            .into_iter()
-            .map(|m| m.0)
-            .collect();
-
-            for i in 0..matches.len() {
-                let ep_count = anime_vec[i]
-                    .available_episodes
-                    .get("sub")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-
-                list.push(Row::new(vec![
-                    matches[i].clone(),
-                    anime_vec[i].typename.clone(),
-                    ep_count.to_string(),
-                    anime_vec[i].id.clone(),
-                ]));
-            }
-            list.insert(
-                0,
-                Row::new(vec!["Name", "Type", "Episode", "Id"]).style(Style::new().bold().green()),
-            );
-
-            list
-        } else {
-            vec![Row::new(vec!["Name", "Type", "Episode", "Id"])]
-        };
-
-        let block_left = Block::bordered()
-            .title("")
-            .border_type(BorderType::Rounded)
-            .style(Style::new().red());
-        frame.render_widget(&block_left, bottom_left);
-        frame.render_widget(
-            Table::new(
-                rows,
-                [
-                    Constraint::Percentage(60),
-                    Constraint::Percentage(10),
-                    Constraint::Percentage(10),
-                    Constraint::Percentage(20),
-                ],
-            ),
-            block_left.inner(bottom_left),
-        );
-
-        let block_right = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .style(Style::new().magenta());
-        frame.render_widget(&block_right, bottom_right);
-        frame.render_widget(
-            Paragraph::new(ASCII_ART).centered(),
-            block_right.inner(bottom_right_top),
-        );
-        frame.render_widget(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .style(Style::new().blue()),
-            block_right.inner(bottom_right_bottom),
-        );
+        self.render_search_input(frame, top);
+        self.render_search_result(frame, bottom_left);
+        self.render_side_menu(frame, bottom_right);
     }
 }
 

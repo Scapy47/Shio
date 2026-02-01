@@ -42,7 +42,9 @@ struct AnimeEdge {
     #[serde(rename = "_id")]
     id: String,
     name: String,
-    available_episodes: HashMap<String, Value>,
+
+    english_name: Option<String>,
+    available_episodes: Option<HashMap<String, Value>>,
     #[serde(rename = "__typename")]
     typename: String,
 }
@@ -87,6 +89,25 @@ struct EpisodeResponse {
     data: EpisodeDataWrapper,
 }
 
+//  NOTE: Response for get_episode_list()
+#[derive(Deserialize, Debug)]
+struct ShowDetail {
+    #[serde(rename = "_id")]
+    id: String,
+    #[serde(rename = "availableEpisodesDetail")]
+    available_episodes_detail: HashMap<String, Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ShowDetailData {
+    show: ShowDetail,
+}
+
+#[derive(Deserialize, Debug)]
+struct EpisodeListResponse {
+    data: ShowDetailData,
+}
+
 #[derive(Debug)]
 struct Api {
     base_api: String,
@@ -110,7 +131,7 @@ impl Api {
         }
     }
 
-    fn request_api(&self, variables: String, gql: String) -> RequestBuilder<WithoutBody> {
+    fn request_api(&self, variables: &str, gql: &str) -> RequestBuilder<WithoutBody> {
         self.agent
             .get(&self.base_api)
             .header("Referer", &self.referer)
@@ -118,16 +139,17 @@ impl Api {
             .query("query", gql)
     }
 
+    /// Search for anime with its name
     fn search_anime(
         &self,
         query: String,
+        mode: &str,
     ) -> Result<SearchResponse, Box<dyn std::error::Error + Send + Sync>> {
-        let gql = "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } }}".to_string();
+        let gql = "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name englishName availableEpisodes __typename } }}";
 
-        let variables_json = format!(
+        let variables_json = &format!(
             r#"{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{}"}},"limit":40,"page":1,"translationType":"{}","countryOrigin":"ALL"}}"#,
-            query,
-            "sub" // TODO:
+            query, mode
         );
 
         let resp = self.request_api(variables_json, gql).call()?;
@@ -136,71 +158,101 @@ impl Api {
         Ok(parsed)
     }
 
+    /// Get the links that can be played/download
     fn get_episode_links(
         &self,
         id: &str,
         ep: &str,
+        mode: &str,
         debug: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let gql = "query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}".to_string();
+    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        let gql = "query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}";
 
-        let variables_json = format!(
+        let variables_json = &format!(
             r#"{{"showId":"{}","translationType":"{}","episodeString":"{}"}}"#,
-            id,
-            "sub", //TODO:
-            ep
+            id, mode, ep
         );
         let resp = self.request_api(variables_json, gql).call()?;
         let parsed: EpisodeResponse = resp.into_body().read_json()?;
 
+        let mut vec = Vec::new();
         for source in parsed.data.episode.source_urls {
-            let provider_name = &source.source_name;
-            let encrypted_url = &source.source_url;
+            let provider_name = source.source_name;
+            let raw_uri = source.source_url;
 
-            let uri = if encrypted_url.starts_with("--") {
-                &decrypt_url(&encrypted_url[2..])
-            } else if encrypted_url.starts_with("//") {
-                &format!("http:{}", &encrypted_url)
+            let uri = if raw_uri.starts_with("--") {
+                decrypt_url(&&raw_uri[2..])
+            } else if raw_uri.starts_with("//") {
+                format!("http:{}", raw_uri)
             } else {
-                encrypted_url
+                raw_uri.clone()
             };
 
             let uri = if uri.contains("/clock") && !uri.contains("/clock.json") {
-                &uri.replace("/clock", "/clock.json")
+                uri.replace("/clock", "/clock.json")
             } else {
                 uri
             };
 
             let uri = if uri.starts_with("/apivtwo/") {
-                &format!("https://allanime.day{}", uri)
+                format!("https://allanime.day{}", uri)
             } else {
                 uri
             };
 
             if debug {
-                println!("\n--- Found Provider: {} ---", provider_name);
+                println!("-------------------------");
+                println!("--- Found Provider: {} ---", &provider_name);
                 println!("\tepisode:  {}", parsed.data.episode.episode_string);
-                println!("\turi:      {}", uri);
-                println!("\traw-uri:  {}", encrypted_url)
+                println!("\turi:      {}", &uri);
+                println!("\traw-uri:  {}", raw_uri);
+                println!("-------------------------");
             }
+
+            vec.push((provider_name, uri));
         }
 
-        Ok(())
+        Ok(vec)
     }
 
-    //  INFO:
-    fn get_episode_list(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    /// Get list of episodes available from api
+    fn get_episode_list(
+        &self,
+        id: &str,
+        mode: &str,
+        debug: bool,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let gql =
-            "query ($showId: String!) { show( _id: $showId ) { _id availableEpisodesDetail }}"
-                .to_string();
-        let variables_json = format!(r#"{{"showId":"{}"}}"#, id);
+            "query ($showId: String!) { show( _id: $showId ) { _id availableEpisodesDetail }}";
+        let variables_json = &format!(r#"{{"showId":"{}"}}"#, id);
 
         let resp = self.request_api(variables_json, gql).call()?;
-        // let parsed: EpisodeResponse = resp.into_body().read_json()?;
-        let res_str = resp.into_body().read_to_string()?;
-        println!("\n{}", res_str);
+        let parsed: EpisodeListResponse = resp.into_body().read_json()?;
 
-        Ok(())
+        let mut episodes = parsed
+            .data
+            .show
+            .available_episodes_detail
+            .get(mode)
+            .ok_or(format!("No episodes found for mode '{}'", mode))?
+            .clone();
+
+        episodes.sort_by(|a, b| {
+            let a_num = a.parse::<f64>().unwrap_or(0.0);
+            let b_num = b.parse::<f64>().unwrap_or(0.0);
+            a_num
+                .partial_cmp(&b_num)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        if debug {
+            println!("-------------------------");
+            println!("\tID:    {}", parsed.data.show.id);
+            println!("\tEPISODES: {:?}", &episodes);
+            println!("-------------------------");
+        }
+
+        Ok(episodes)
     }
 }
 
@@ -250,7 +302,7 @@ impl App {
         let api_clone = self.api.clone();
         let name = self.args.name.clone();
         let tx_init = tx.clone();
-        thread::spawn(move || match api_clone.search_anime(name) {
+        thread::spawn(move || match api_clone.search_anime(name, "sub") {
             Ok(resp) => tx_init.send(ApiResponse::SearchResponse(resp.data.shows.edges)),
             Err(e) => tx_init.send(ApiResponse::Error(e.to_string())),
         });
@@ -355,15 +407,19 @@ impl App {
 
             let ep_count = item
                 .available_episodes
-                .get("sub")
+                .as_ref()
+                .and_then(|map| map.get("sub"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
 
+            let english_name = item.english_name.as_deref().unwrap_or(&item.name);
+
             rows.push(Row::new(vec![
+                english_name.to_string(),
                 item.name.clone(),
-                item.typename.clone(),
                 ep_count.to_string(),
                 item.id.clone(),
+                item.typename.clone(),
             ]));
         }
 
@@ -413,10 +469,10 @@ fn main() -> color_eyre::eyre::Result<()> {
     let args = Args::parse();
     let api = Api::new();
 
-    if let Err(e) = api.get_episode_links("HM5zSCbGwSAsWPFjX", "1", args.debug) {
+    if let Err(e) = api.get_episode_links("HM5zSCbGwSAsWPFjX", "1", "sub", args.debug) {
         eprintln!("error: {}", e);
     }
-    if let Err(e) = api.get_episode_list("HM5zSCbGwSAsWPFjX") {
+    if let Err(e) = api.get_episode_list("HM5zSCbGwSAsWPFjX", "sub", args.debug) {
         eprintln!("error: {}", e);
     }
 

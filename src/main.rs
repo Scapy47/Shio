@@ -1,6 +1,6 @@
 use clap::Parser;
 use nucleo_matcher::{
-    Config, Matcher,
+    Config, Matcher, Utf32Str,
     pattern::{AtomKind, CaseMatching, Normalization, Pattern},
 };
 use ratatui::{
@@ -204,6 +204,12 @@ impl Api {
     }
 }
 
+#[derive(Debug)]
+enum ApiResponse {
+    Error(String),
+    SearchResponse(Vec<AnimeEdge>),
+}
+
 #[derive(Debug, Default)]
 struct WidgetStates {
     table: TableState,
@@ -217,6 +223,7 @@ struct App {
     search_resp: Option<Vec<AnimeEdge>>,
     exit: bool,
     matcher: Matcher,
+    search_index: Vec<usize>,
     widget_states: WidgetStates,
 }
 
@@ -231,37 +238,36 @@ impl App {
             input: Input::default(),
             api: api,
             matcher: Matcher::new(Config::DEFAULT),
+            search_index: vec![0],
             search_resp: None,
             exit: false,
         }
     }
 
     fn main_loop(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel::<ApiResponse>();
+
         let api_clone = self.api.clone();
         let name = self.args.name.clone();
-
-        thread::spawn(move || tx.send(api_clone.search_anime(name).unwrap()));
+        let tx_init = tx.clone();
+        thread::spawn(move || match api_clone.search_anime(name) {
+            Ok(resp) => tx_init.send(ApiResponse::SearchResponse(resp.data.shows.edges)),
+            Err(e) => tx_init.send(ApiResponse::Error(e.to_string())),
+        });
 
         while !self.exit {
-            if let Ok(resp) = rx.try_recv() {
-                // let vec: Vec<String> = resp
-                //     .data
-                //     .shows
-                //     .edges
-                //     .iter()
-                //     .map(|e| e.name.clone())
-                //     .collect();
-                //
-                // let matches = Pattern::new(
-                //     &self.input.value(),
-                //     CaseMatching::Smart,
-                //     Normalization::Smart,
-                //     AtomKind::Fuzzy,
-                // )
-                // .match_list(vec, &mut self.matcher);
+            if let Ok(api_resp) = rx.try_recv() {
+                match api_resp {
+                    ApiResponse::SearchResponse(shows) => {
+                        self.search_resp = Some(shows);
 
-                self.search_resp = Some(resp.data.shows.edges);
+                        let count = self.search_resp.as_ref().unwrap().len();
+                        self.search_index = (0..count).collect();
+                    }
+                    ApiResponse::Error(err_msg) => {
+                        panic!("API Error: {}", err_msg);
+                    }
+                }
             }
 
             terminal.draw(|frame| self.render(frame))?;
@@ -274,18 +280,54 @@ impl App {
                         event::KeyCode::Down => self.widget_states.table.select_next(),
                         event::KeyCode::Up => self.widget_states.table.select_previous(),
                         event::KeyCode::Enter => {
-                            if self.widget_states.table.selected() == Some(2) {
-                                self.exit = true
-                            }
+                            // let Some(search_resp_vec) = &self.search_resp else {
+                            //     return Ok(());
+                            // };
+                            //
+                            // let table_column = self.widget_states.table.selected().unwrap_or(0);
+                            // let id = search_resp_vec[self.search_index[table_column]].id.clone();
+
+                            // let api_clone = self.api.clone()
+                            // thread::spawn(move || tx.send(api_clone.get_episode_list(&id)).unwrap() );
                         }
                         _ => {
                             self.input.handle_event(&event);
+                            self.update_search_index();
                         }
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    fn update_search_index(&mut self) {
+        let Some(search_resp_vec) = &self.search_resp else {
+            return;
+        };
+
+        let pattern = Pattern::new(
+            &self.input.value(),
+            CaseMatching::Smart,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        );
+
+        let mut buf = Vec::new();
+        let mut matches_result: Vec<(usize, u32)> = search_resp_vec
+            .iter()
+            .enumerate()
+            .filter_map(|(og_index, item)| {
+                let haystack = Utf32Str::new(&item.name, &mut buf);
+
+                pattern
+                    .score(haystack, &mut self.matcher)
+                    .map(|score| (og_index, score))
+            })
+            .collect();
+        matches_result.sort_by(|a, b| b.1.cmp(&a.1));
+
+        self.search_index = matches_result.into_iter().map(|(i, _)| i).collect();
     }
 
     fn render_search_input(&mut self, frame: &mut Frame, area: Rect) {
@@ -303,37 +345,25 @@ impl App {
     }
 
     fn render_search_result(&mut self, frame: &mut Frame, area: Rect) {
-        let search_resp_vec = if let Some(resp) = &self.search_resp {
-            resp
-        } else {
+        let Some(search_resp_vec) = &self.search_resp else {
             return;
         };
-        let name_vec: Vec<String> = search_resp_vec.iter().map(|e| e.name.clone()).collect();
-
-        let matches: Vec<&String> = Pattern::new(
-            &self.input.value(),
-            CaseMatching::Smart,
-            Normalization::Smart,
-            AtomKind::Fuzzy,
-        )
-        .match_list(&name_vec, &mut self.matcher)
-        .into_iter()
-        .map(|m| m.0)
-        .collect();
 
         let mut rows = vec![];
-        for i in 0..matches.len() {
-            let ep_count = search_resp_vec[i]
+        for index in &self.search_index {
+            let item = &search_resp_vec[*index];
+
+            let ep_count = item
                 .available_episodes
                 .get("sub")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
 
             rows.push(Row::new(vec![
-                matches[i].clone(),
-                search_resp_vec[i].typename.clone(),
+                item.name.clone(),
+                item.typename.clone(),
                 ep_count.to_string(),
-                search_resp_vec[i].id.clone(),
+                item.id.clone(),
             ]));
         }
 
@@ -353,12 +383,13 @@ impl App {
                     .title("Results")
                     .title_alignment(HorizontalAlignment::Center),
             )
-            .row_highlight_style(Style::new().bg(Color::LightBlue)),
+            .row_highlight_style(Style::new().bg(Color::LightBlue).fg(Color::Black)),
             area,
             &mut self.widget_states.table,
         );
     }
 
+    // fn render_episode_list(&mut self, frame: &mut Frame, area: Rect) {}
     fn render_side_menu(&mut self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Paragraph::new(ASCII_ART).centered(), area);
     }

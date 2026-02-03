@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    process::Command,
     sync::{Arc, mpsc},
     thread,
     time::Duration,
@@ -113,6 +114,7 @@ struct Api {
     base_api: String,
     referer: String,
     agent: Agent,
+    user_agent: String,
     mode: String,
     debug: bool,
 }
@@ -126,9 +128,10 @@ enum Mode {
 
 impl Api {
     fn new(mode: Mode, debug: bool) -> Self {
+        let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0";
         let config = Agent::config_builder()
             .timeout_per_call(Some(Duration::from_secs(12)))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0")
+            .user_agent(user_agent)
             .https_only(true)
             .build();
         let agent = Agent::new_with_config(config);
@@ -144,6 +147,7 @@ impl Api {
             base_api: "https://api.allanime.day/api".to_string(),
             referer: "https://allmanga.to".to_string(),
             agent: agent,
+            user_agent: user_agent.to_string(),
             mode: mode,
             debug: debug,
         }
@@ -290,7 +294,7 @@ struct App {
     resp: ApiResponse,
     exit: bool,
     matcher: Matcher,
-    table_to_data_index: Vec<usize>,
+    rows_to_data_index: Vec<usize>,
     widget_states: WidgetStates,
 }
 
@@ -305,7 +309,7 @@ impl App {
             input: Input::default(),
             api: api,
             matcher: Matcher::new(Config::DEFAULT),
-            table_to_data_index: Vec::new(),
+            rows_to_data_index: Vec::new(),
             resp: ApiResponse::Error(String::new()),
             exit: false,
         }
@@ -326,11 +330,24 @@ impl App {
 
         while !self.exit {
             if let Ok(api_resp) = rx.try_recv() {
+                match &api_resp {
+                    ApiResponse::SearchResp(resp) => {
+                        self.rows_to_data_index = (0..resp.len()).collect();
+                    }
+                    ApiResponse::EpisodeListResp((_, ep_list, _)) => {
+                        self.rows_to_data_index = (0..ep_list.len()).collect();
+                    }
+                    ApiResponse::EpisodeLinksResp(links) => {
+                        self.rows_to_data_index = (0..links.len()).collect();
+                    }
+                    _ => {}
+                }
+
                 self.resp = api_resp;
             }
 
-            if self.table_to_data_index.is_empty() {
-                self.update_search_index();
+            if self.rows_to_data_index.is_empty() {
+                self.update_row_to_data_index();
             }
 
             terminal.draw(|frame| self.render(frame))?;
@@ -349,7 +366,7 @@ impl App {
                                 let Some(row) = self.widget_states.table.selected() else {
                                     return Ok(());
                                 };
-                                let id = resp[self.table_to_data_index[row]].id.clone();
+                                let id = resp[self.rows_to_data_index[row]].id.clone();
 
                                 let tx_clone = tx.clone();
                                 let api_clone = self.api.clone();
@@ -362,7 +379,7 @@ impl App {
                                 let Some(row) = self.widget_states.table.selected() else {
                                     return Ok(());
                                 };
-                                let ep = list[self.table_to_data_index[row]].clone();
+                                let ep = list[self.rows_to_data_index[row]].clone();
                                 let id_clone = id.clone();
                                 let tx_clone = tx.clone();
                                 let api_clone = self.api.clone();
@@ -376,7 +393,29 @@ impl App {
                                 });
                             }
                             ApiResponse::EpisodeLinksResp(links) => {
-                                todo!("i will do it dont worry be happy")
+                                let Some(row) = self.widget_states.table.selected() else {
+                                    return Ok(());
+                                };
+                                let (_provider, url) = &links[self.rows_to_data_index[row]];
+                                let api = self.api.clone();
+
+                                let cmd = Command::new("curl")
+                                    .arg("-L")
+                                    .arg("-H")
+                                    .arg(format!("Referer: {}", api.referer))
+                                    .arg("-H")
+                                    .arg(format!("User-Agent: {}", api.user_agent))
+                                    .arg(url)
+                                    .arg("-O")
+                                    .arg("--progress-bar")
+                                    .status()
+                                    .expect("Failed to execute curl")
+                                    .code()
+                                    .unwrap_or(1);
+
+                                if cmd == 1 || cmd == 0 {
+                                    self.exit = true;
+                                }
                             }
                             ApiResponse::Error(e) => {
                                 panic!("Error: {}", e)
@@ -384,7 +423,7 @@ impl App {
                         },
                         _ => {
                             self.input.handle_event(&event);
-                            self.update_search_index();
+                            self.update_row_to_data_index();
                         }
                     }
                 }
@@ -393,7 +432,8 @@ impl App {
         Ok(())
     }
 
-    fn update_search_index(&mut self) {
+    /// update the index of rows to data pointer vec
+    fn update_row_to_data_index(&mut self) {
         let pattern = Pattern::new(
             &self.input.value(),
             CaseMatching::Smart,
@@ -417,11 +457,9 @@ impl App {
                     })
                     .collect();
                 matches_result.sort_by(|a, b| b.1.cmp(&a.1));
-                self.table_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
+                self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
             }
             ApiResponse::EpisodeListResp((_, ep_list, _)) => {
-                self.table_to_data_index.clear();
-
                 let mut matches_result: Vec<(usize, u32)> = ep_list
                     .iter()
                     .enumerate()
@@ -434,16 +472,14 @@ impl App {
                     })
                     .collect();
                 matches_result.sort_by(|a, b| b.1.cmp(&a.1));
-                self.table_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
+                self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
             }
             ApiResponse::EpisodeLinksResp(links) => {
-                self.table_to_data_index.clear();
-
                 let mut matches_result: Vec<(usize, u32)> = links
                     .iter()
                     .enumerate()
-                    .filter_map(|(og_index, item)| {
-                        let haystack = Utf32Str::new(&item.0, &mut buf);
+                    .filter_map(|(og_index, (provider_name, _link))| {
+                        let haystack = Utf32Str::new(&provider_name, &mut buf);
 
                         pattern
                             .score(haystack, &mut self.matcher)
@@ -451,7 +487,7 @@ impl App {
                     })
                     .collect();
                 matches_result.sort_by(|a, b| b.1.cmp(&a.1));
-                self.table_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
+                self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
             }
             ApiResponse::Error(_) => {
                 return;
@@ -482,7 +518,7 @@ impl App {
         };
 
         let mut rows = vec![];
-        for index in &self.table_to_data_index {
+        for index in &self.rows_to_data_index {
             let item = &search_resp_vec[*index];
 
             let ep_count = item
@@ -530,7 +566,7 @@ impl App {
     fn render_episode_list(&mut self, frame: &mut Frame, area: Rect, data: Vec<String>) {
         let mut rows = Vec::new();
 
-        for index in &self.table_to_data_index {
+        for index in &self.rows_to_data_index {
             let item = &data[*index];
             rows.push(Row::new(vec![item.clone()]));
         }
@@ -547,7 +583,7 @@ impl App {
     fn render_episode_links(&mut self, frame: &mut Frame, area: Rect, data: Vec<(String, String)>) {
         let mut rows = Vec::new();
 
-        for index in &self.table_to_data_index {
+        for index in &self.rows_to_data_index {
             let (provider_name, link) = &data[*index];
             rows.push(Row::new(vec![provider_name.clone(), link.clone()]));
         }
@@ -586,7 +622,7 @@ impl App {
             ApiResponse::EpisodeLinksResp(links) => {
                 self.render_episode_links(frame, bottom_left, links.clone());
             }
-            ApiResponse::Error(e) => {
+            ApiResponse::Error(_) => {
                 return;
             }
         }

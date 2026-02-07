@@ -10,20 +10,20 @@ use ratatui::{
     style::{Color, Style},
     widgets::{Block, BorderType, Paragraph, Row, Table, TableState},
 };
-use serde::Deserialize;
-use serde_json::Value;
 use std::{
-    collections::HashMap,
     process::Command,
     sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
 use tui_input::{Input, backend::crossterm::EventHandler};
-use ureq::{Agent, RequestBuilder, typestate::WithoutBody};
 
+mod api;
 mod utils;
-use crate::utils::{ASCII_ART, decrypt_url};
+use crate::{
+    api::{AnimeEdge, Api, Mode},
+    utils::{ASCII_ART, decrypt_url},
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -33,244 +33,6 @@ struct Args {
     /// Print debuging info
     #[arg(long)]
     debug: bool,
-}
-
-//  NOTE: Response from search_anime()
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct AnimeEdge {
-    #[serde(rename = "_id")]
-    id: String,
-    name: String,
-
-    english_name: Option<String>,
-    available_episodes: Option<HashMap<String, Value>>,
-    #[serde(rename = "__typename")]
-    typename: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct ShowsData {
-    edges: Vec<AnimeEdge>,
-}
-
-#[derive(Deserialize, Debug)]
-struct DataWrapper {
-    shows: ShowsData,
-}
-
-#[derive(Deserialize, Debug)]
-struct SearchResponse {
-    data: DataWrapper,
-}
-
-//  NOTE: Response for get_episode_links()
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct SourceUrl {
-    source_url: String,
-    source_name: String,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct EpisodeData {
-    episode_string: String,
-    source_urls: Vec<SourceUrl>,
-}
-
-#[derive(Deserialize, Debug)]
-struct EpisodeDataWrapper {
-    episode: EpisodeData,
-}
-
-#[derive(Deserialize, Debug)]
-struct EpisodeResponse {
-    data: EpisodeDataWrapper,
-}
-
-//  NOTE: Response for get_episode_list()
-#[derive(Deserialize, Debug)]
-struct ShowDetail {
-    #[serde(rename = "_id")]
-    id: String,
-    name: String,
-    #[serde(rename = "availableEpisodesDetail")]
-    available_episodes_detail: HashMap<String, Vec<String>>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ShowDetailData {
-    show: ShowDetail,
-}
-
-#[derive(Deserialize, Debug)]
-struct EpisodeListResponse {
-    data: ShowDetailData,
-}
-
-#[derive(Debug)]
-struct Api {
-    base_api: String,
-    referer: String,
-    agent: Agent,
-    user_agent: String,
-    mode: String,
-    debug: bool,
-}
-
-#[derive(Debug)]
-enum Mode {
-    Sub,
-    Dub,
-    Raw,
-}
-
-impl Api {
-    fn new(mode: Mode, debug: bool) -> Self {
-        let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0";
-        let config = Agent::config_builder()
-            .timeout_per_call(Some(Duration::from_secs(12)))
-            .user_agent(user_agent)
-            .https_only(true)
-            .build();
-        let agent = Agent::new_with_config(config);
-
-        let mode = match mode {
-            Mode::Sub => "sub",
-            Mode::Dub => "dub",
-            Mode::Raw => "raw",
-        }
-        .to_string();
-
-        Api {
-            base_api: "https://api.allanime.day/api".to_string(),
-            referer: "https://allmanga.to".to_string(),
-            agent: agent,
-            user_agent: user_agent.to_string(),
-            mode: mode,
-            debug: debug,
-        }
-    }
-
-    fn request_api(&self, variables: &str, gql: &str) -> RequestBuilder<WithoutBody> {
-        self.agent
-            .get(&self.base_api)
-            .header("Referer", &self.referer)
-            .query("variables", variables)
-            .query("query", gql)
-    }
-
-    /// Search for anime with its name
-    fn search_anime(
-        &self,
-        query: String,
-    ) -> Result<SearchResponse, Box<dyn std::error::Error + Send + Sync>> {
-        let gql = "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name englishName availableEpisodes __typename } }}";
-
-        let variables_json = &format!(
-            r#"{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{}"}},"limit":40,"page":1,"translationType":"{}","countryOrigin":"ALL"}}"#,
-            query, self.mode
-        );
-
-        let resp = self.request_api(variables_json, gql).call()?;
-        let parsed: SearchResponse = resp.into_body().read_json()?;
-
-        Ok(parsed)
-    }
-
-    /// Get the links that can be played/download
-    fn get_episode_links(
-        &self,
-        id: &str,
-        ep: &str,
-    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-        let gql = "query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}";
-
-        let variables_json = &format!(
-            r#"{{"showId":"{}","translationType":"{}","episodeString":"{}"}}"#,
-            id, self.mode, ep
-        );
-        let resp = self.request_api(variables_json, gql).call()?;
-        let parsed: EpisodeResponse = resp.into_body().read_json()?;
-
-        let mut vec = Vec::new();
-        for source in parsed.data.episode.source_urls {
-            let provider_name = source.source_name;
-            let raw_uri = source.source_url;
-
-            let uri = if raw_uri.starts_with("--") {
-                decrypt_url(&&raw_uri[2..])
-            } else if raw_uri.starts_with("//") {
-                format!("http:{}", raw_uri)
-            } else {
-                raw_uri.clone()
-            };
-
-            let uri = if uri.contains("/clock") && !uri.contains("/clock.json") {
-                uri.replace("/clock", "/clock.json")
-            } else {
-                uri
-            };
-
-            let uri = if uri.starts_with("/apivtwo/") {
-                format!("https://allanime.day{}", uri)
-            } else {
-                uri
-            };
-
-            if self.debug {
-                println!("-------------------------");
-                println!("--- Found Provider: {} ---", &provider_name);
-                println!("\tepisode:  {}", parsed.data.episode.episode_string);
-                println!("\turi:      {}", &uri);
-                println!("\traw-uri:  {}", raw_uri);
-                println!("-------------------------");
-            }
-
-            vec.push((provider_name, uri));
-        }
-
-        Ok(vec)
-    }
-
-    /// Get list of episodes available from api
-    fn get_episode_list(
-        &self,
-        id: &str,
-    ) -> Result<(String, Vec<String>, String), Box<dyn std::error::Error>> {
-        let gql =
-            "query ($showId: String!) { show( _id: $showId ) { _id name availableEpisodesDetail }}";
-        let variables_json = &format!(r#"{{"showId":"{}"}}"#, id);
-
-        let resp = self.request_api(variables_json, gql).call()?;
-        let parsed: EpisodeListResponse = resp.into_body().read_json()?;
-
-        let mut episodes = parsed
-            .data
-            .show
-            .available_episodes_detail
-            .get(&self.mode)
-            .ok_or(format!("No episodes found for mode '{}'", &self.mode))?
-            .clone();
-
-        episodes.sort_by(|a, b| {
-            let a_num = a.parse::<f64>().unwrap_or(0.0);
-            let b_num = b.parse::<f64>().unwrap_or(0.0);
-            a_num
-                .partial_cmp(&b_num)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        if self.debug {
-            println!("-------------------------");
-            println!("\tID:    {}", parsed.data.show.id);
-            println!("\tEPISODES: {:?}", &episodes);
-            println!("-------------------------");
-        }
-
-        Ok((parsed.data.show.name, episodes, parsed.data.show.id))
-    }
 }
 
 #[derive(Debug)]

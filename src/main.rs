@@ -40,24 +40,37 @@ enum ApiResponse {
     Error(String),
     SearchResp(Vec<AnimeEdge>),
     EpisodeListResp((String, Vec<String>, String)),
-    EpisodeLinksResp(Vec<(String, String)>),
+    EpisodeLinksResp((String, Vec<(String, String)>)),
 }
 
-#[derive(Debug, Default)]
-struct WidgetStates {
-    table: TableState,
+#[derive(Debug)]
+/// View of the app
+enum View {
+    /// show loading layout
+    Loading,
+    /// select the anime
+    Search,
+    /// select episode
+    Episode,
+    /// select provider
+    Provider,
 }
 
 #[derive(Debug)]
 struct App {
+    /// current view that is being rendered
+    view: View,
+    /// condition that is allowing loop to contine
+    exit: bool,
+    /// arguments passed to cli
     args: Args,
+    /// search bar input state
     input: Input,
     api: Arc<Api>,
     resp: ApiResponse,
-    exit: bool,
     matcher: Matcher,
     rows_to_data_index: Vec<usize>,
-    widget_states: WidgetStates,
+    table_state: TableState,
 }
 
 impl App {
@@ -66,14 +79,15 @@ impl App {
         let api = Arc::new(Api::new(Mode::Sub, args.debug));
 
         Self {
-            widget_states: WidgetStates::default(),
+            table_state: TableState::default(),
             args: args,
             input: Input::default(),
             api: api,
             matcher: Matcher::new(Config::DEFAULT),
             rows_to_data_index: Vec::new(),
-            resp: ApiResponse::Error(String::new()),
+            resp: ApiResponse::Error("Error-001: Application has just initialized".to_string()),
             exit: false,
+            view: View::Loading,
         }
     }
 
@@ -88,24 +102,31 @@ impl App {
             Err(e) => tx_clone.send(ApiResponse::Error(e.to_string())),
         });
 
-        self.widget_states.table.select(Some(0));
+        self.table_state.select(Some(0));
 
         while !self.exit {
             if let Ok(api_resp) = rx.try_recv() {
                 match &api_resp {
                     ApiResponse::SearchResp(resp) => {
                         self.rows_to_data_index = (0..resp.len()).collect();
+                        self.view = View::Search;
                     }
                     ApiResponse::EpisodeListResp((_, ep_list, _)) => {
                         self.rows_to_data_index = (0..ep_list.len()).collect();
+                        self.view = View::Episode;
                     }
-                    ApiResponse::EpisodeLinksResp(links) => {
+                    ApiResponse::EpisodeLinksResp((_, links)) => {
                         self.rows_to_data_index = (0..links.len()).collect();
+                        self.view = View::Provider;
                     }
-                    _ => {}
+                    ApiResponse::Error(e) => {
+                        println!("{}", e);
+                        self.exit = true
+                    }
                 }
 
                 self.resp = api_resp;
+            } else {
             }
 
             if self.rows_to_data_index.is_empty() {
@@ -119,68 +140,76 @@ impl App {
                 if let Event::Key(key) = event {
                     match key.code {
                         event::KeyCode::Esc => return Ok(()),
-                        event::KeyCode::Down => self.widget_states.table.select_next(),
-                        event::KeyCode::Up => self.widget_states.table.select_previous(),
-                        event::KeyCode::Left => self.widget_states.table.select_next_column(),
-                        event::KeyCode::Right => self.widget_states.table.select_previous_column(),
-                        event::KeyCode::Enter => match &self.resp {
-                            ApiResponse::SearchResp(resp) => {
-                                let Some(row) = self.widget_states.table.selected() else {
-                                    return Ok(());
-                                };
-                                let id = resp[self.rows_to_data_index[row]].id.clone();
+                        event::KeyCode::Down => self.table_state.select_next(),
+                        event::KeyCode::Up => self.table_state.select_previous(),
+                        event::KeyCode::Left => self.table_state.select_next_column(),
+                        event::KeyCode::Right => self.table_state.select_previous_column(),
+                        event::KeyCode::Enter => match self.view {
+                            View::Loading => (),
+                            View::Search => {
+                                if let ApiResponse::SearchResp(resp) = &self.resp {
+                                    let Some(row) = self.table_state.selected() else {
+                                        return Ok(());
+                                    };
+                                    let id = resp[self.rows_to_data_index[row]].id.clone();
 
-                                let tx_clone = tx.clone();
-                                let api_clone = self.api.clone();
-                                thread::spawn(move || match api_clone.get_episode_list(&id) {
-                                    Ok(resp) => tx_clone.send(ApiResponse::EpisodeListResp(resp)),
-                                    Err(e) => tx_clone.send(ApiResponse::Error(e.to_string())),
-                                });
-                            }
-                            ApiResponse::EpisodeListResp((_, list, id)) => {
-                                let Some(row) = self.widget_states.table.selected() else {
-                                    return Ok(());
-                                };
-                                let ep = list[self.rows_to_data_index[row]].clone();
-                                let id_clone = id.clone();
-                                let tx_clone = tx.clone();
-                                let api_clone = self.api.clone();
-                                thread::spawn(move || {
-                                    match api_clone.get_episode_links(&id_clone, &ep) {
+                                    let tx_clone = tx.clone();
+                                    let api_clone = self.api.clone();
+                                    thread::spawn(move || match api_clone.get_episode_list(&id) {
                                         Ok(resp) => {
-                                            tx_clone.send(ApiResponse::EpisodeLinksResp(resp))
+                                            tx_clone.send(ApiResponse::EpisodeListResp(resp))
                                         }
                                         Err(e) => tx_clone.send(ApiResponse::Error(e.to_string())),
-                                    }
-                                });
-                            }
-                            ApiResponse::EpisodeLinksResp(links) => {
-                                let Some(row) = self.widget_states.table.selected() else {
-                                    return Ok(());
-                                };
-                                let (_provider, url) = &links[self.rows_to_data_index[row]];
-                                let api = self.api.clone();
-
-                                let cmd = Command::new("curl")
-                                    .arg("-L")
-                                    .arg("-H")
-                                    .arg(format!("Referer: {}", api.referer))
-                                    .arg("-H")
-                                    .arg(format!("User-Agent: {}", api.user_agent))
-                                    .arg(url)
-                                    .arg("-O")
-                                    .arg("--progress-bar")
-                                    .status()
-                                    .expect("Failed to execute curl")
-                                    .code()
-                                    .unwrap_or(1);
-
-                                if cmd == 1 || cmd == 0 {
-                                    self.exit = true;
+                                    });
                                 }
                             }
-                            ApiResponse::Error(e) => {
-                                panic!("Error: {}", e)
+                            View::Episode => {
+                                if let ApiResponse::EpisodeListResp((_, list, id)) = &self.resp {
+                                    let Some(row) = self.table_state.selected() else {
+                                        return Ok(());
+                                    };
+                                    let ep = list[self.rows_to_data_index[row]].clone();
+                                    let id_clone = id.clone();
+                                    let tx_clone = tx.clone();
+                                    let api_clone = self.api.clone();
+                                    thread::spawn(move || {
+                                        match api_clone.get_episode_links(&id_clone, &ep) {
+                                            Ok(resp) => {
+                                                tx_clone.send(ApiResponse::EpisodeLinksResp(resp))
+                                            }
+                                            Err(e) => {
+                                                tx_clone.send(ApiResponse::Error(e.to_string()))
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            View::Provider => {
+                                if let ApiResponse::EpisodeLinksResp((_, links)) = &self.resp {
+                                    let Some(row) = self.table_state.selected() else {
+                                        return Ok(());
+                                    };
+                                    let (_provider, url) = &links[self.rows_to_data_index[row]];
+                                    let api = self.api.clone();
+
+                                    let cmd = Command::new("curl")
+                                        .arg("-L")
+                                        .arg("-H")
+                                        .arg(format!("Referer: {}", api.referer))
+                                        .arg("-H")
+                                        .arg(format!("User-Agent: {}", api.user_agent))
+                                        .arg(url)
+                                        .arg("-O")
+                                        .arg("--progress-bar")
+                                        .status()
+                                        .expect("Failed to execute curl")
+                                        .code()
+                                        .unwrap_or(1);
+
+                                    if cmd == 1 || cmd == 0 {
+                                        self.exit = true;
+                                    }
+                                }
                             }
                         },
                         _ => {
@@ -236,7 +265,7 @@ impl App {
                 matches_result.sort_by(|a, b| b.1.cmp(&a.1));
                 self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
             }
-            ApiResponse::EpisodeLinksResp(links) => {
+            ApiResponse::EpisodeLinksResp((_, links)) => {
                 let mut matches_result: Vec<(usize, u32)> = links
                     .iter()
                     .enumerate()
@@ -257,7 +286,18 @@ impl App {
         };
     }
 
-    fn render_search_input(&mut self, frame: &mut Frame, area: Rect) {
+    /// render the skeleton before data is there
+    fn render_skeleton(&self, frame: &mut Frame) {
+        frame.render_widget(
+            Block::bordered().border_type(BorderType::Rounded),
+            frame.area(),
+        );
+    }
+
+    fn render_search_input(&self, frame: &mut Frame, area: Rect) {
+        let width = area.width.max(2) - 2;
+        let scroll = self.input.visual_scroll(width as usize);
+
         frame.render_widget(
             Paragraph::new(self.input.value()).block(
                 Block::bordered()
@@ -265,10 +305,15 @@ impl App {
                     .title_style(Style::new().bold())
                     .title_alignment(HorizontalAlignment::Center)
                     .border_type(BorderType::Rounded)
-                    .style(Style::new().green()),
+                    .style(Style::new().cyan()),
             ),
             area,
         );
+
+        let cursor_x = area.x + 1 + (self.input.visual_cursor().max(scroll) - scroll) as u16;
+        let cursor_y = area.y + 1;
+
+        frame.set_cursor_position((cursor_x, cursor_y));
     }
 
     fn render_search_result(&mut self, frame: &mut Frame, area: Rect) {
@@ -288,25 +333,27 @@ impl App {
                 .as_ref()
                 .and_then(|map| map.get("sub"))
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .to_string();
 
             let english_name = item.english_name.as_deref().unwrap_or(&item.name);
 
-            rows.push(Row::new(vec![
-                english_name.to_string(),
-                item.name.clone(),
-                ep_count.to_string(),
-                item.id.clone(),
-                item.typename.clone(),
-            ]));
+            rows.push(
+                Row::new(vec![
+                    format!("{}\n{}", item.name, english_name),
+                    ep_count,
+                    item.id.clone(),
+                    item.typename.clone(),
+                ])
+                .height(2),
+            );
         }
 
         frame.render_stateful_widget(
             Table::new(
                 rows,
                 [
-                    Constraint::Percentage(60),
-                    Constraint::Percentage(20),
+                    Constraint::Percentage(80),
                     Constraint::Percentage(5),
                     Constraint::Percentage(5),
                     Constraint::Fill(1),
@@ -319,9 +366,9 @@ impl App {
                     .title_alignment(HorizontalAlignment::Center),
             )
             .highlight_symbol("» ")
-            .row_highlight_style(Style::new().bg(Color::LightBlue).fg(Color::Black)),
+            .row_highlight_style(Style::new().bg(Color::Cyan).fg(Color::Black)),
             area,
-            &mut self.widget_states.table,
+            &mut self.table_state,
         );
     }
 
@@ -338,7 +385,7 @@ impl App {
                 .highlight_symbol("» ")
                 .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
             area,
-            &mut self.widget_states.table,
+            &mut self.table_state,
         );
     }
 
@@ -355,11 +402,11 @@ impl App {
                 .highlight_symbol("» ")
                 .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
             area,
-            &mut self.widget_states.table,
+            &mut self.table_state,
         );
     }
 
-    fn render_side_menu(&mut self, frame: &mut Frame, area: Rect) {
+    fn render_side_menu(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Paragraph::new(ASCII_ART).centered(), area);
     }
 
@@ -370,22 +417,27 @@ impl App {
         let [bottom_left, bottom_right] =
             Layout::horizontal([Constraint::Percentage(70), Constraint::Fill(1)]).areas(bottom);
 
-        self.render_search_input(frame, top);
-
-        match &self.resp {
-            ApiResponse::SearchResp(_) => {
-                self.render_search_result(frame, bottom_left);
-                self.render_side_menu(frame, bottom_right);
+        match self.view {
+            View::Loading => self.render_skeleton(frame),
+            View::Search => {
+                if let ApiResponse::SearchResp(_) = &self.resp {
+                    self.render_search_input(frame, top);
+                    self.render_search_result(frame, bottom_left);
+                    self.render_side_menu(frame, bottom_right);
+                }
             }
-            ApiResponse::EpisodeListResp((_, ep_list, _)) => {
-                self.render_episode_list(frame, bottom_left, ep_list.clone());
-                self.render_side_menu(frame, bottom_right);
+            View::Episode => {
+                if let ApiResponse::EpisodeListResp((_, ep_list, _)) = &self.resp {
+                    self.render_search_input(frame, top);
+                    self.render_episode_list(frame, bottom_left, ep_list.clone());
+                    self.render_side_menu(frame, bottom_right);
+                }
             }
-            ApiResponse::EpisodeLinksResp(links) => {
-                self.render_episode_links(frame, bottom_left, links.clone());
-            }
-            ApiResponse::Error(_) => {
-                return;
+            View::Provider => {
+                if let ApiResponse::EpisodeLinksResp((_, links)) = &self.resp {
+                    self.render_search_input(frame, top);
+                    self.render_episode_links(frame, bottom_left, links.clone());
+                }
             }
         }
     }

@@ -200,17 +200,29 @@ impl App {
                                     let (_provider, url) = &links[self.rows_to_data_index[row]];
                                     let api = self.api.clone();
 
-                                    let player_cmd = env::var("SHIO_PLATER_CMD");
+                                    let default_cmd = format!(
+                                        "curl -L -H 'Referer: {}' -H 'User-Agent: {}' {} -O --progress-bar",
+                                        api.referer, api.user_agent, url
+                                    );
 
-                                    let cmd = Command::new("curl")
-                                        .arg("-L")
-                                        .arg("-H")
-                                        .arg(format!("Referer: {}", api.referer))
-                                        .arg("-H")
-                                        .arg(format!("User-Agent: {}", api.user_agent))
-                                        .arg(url)
-                                        .arg("-O")
-                                        .arg("--progress-bar")
+                                    let mut player_cmd =
+                                        env::var("SHIO_PLAYER_CMD").unwrap_or(default_cmd);
+
+                                    if player_cmd.contains("{url}") {
+                                        player_cmd = player_cmd.replace("{url}", url);
+                                    }
+
+                                    let _ = terminal.clear();
+
+                                    #[cfg(unix)]
+                                    let (shell, flag) = ("sh", "-c");
+
+                                    #[cfg(not(unix))]
+                                    let (shell, flag) = ("cmd", "/C");
+
+                                    let cmd = Command::new(shell)
+                                        .arg(flag)
+                                        .arg(player_cmd)
                                         .status()
                                         .expect("Failed to execute curl")
                                         .code()

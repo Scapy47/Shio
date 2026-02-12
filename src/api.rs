@@ -190,7 +190,7 @@ impl Api {
                 uri
             };
 
-            let uri = if uri.contains("clock.json") {
+            let uri = if uri.contains("clock.json") || uri.contains("https://allanime.day") {
                 self.resolve_clock_urls(&uri).unwrap_or(uri)
             } else {
                 uri

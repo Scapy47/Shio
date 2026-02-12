@@ -194,11 +194,18 @@ impl App {
                             }
                             View::Provider => {
                                 if let ApiResponse::EpisodeLinksResp((_, links)) = &self.resp {
+                                    let _ = terminal.clear();
+
                                     let Some(row) = self.table_state.selected() else {
                                         return Ok(());
                                     };
                                     let (_provider, url) = &links[self.rows_to_data_index[row]];
                                     let api = self.api.clone();
+
+                                    let url = &(url.contains("clock.json")
+                                        || url.contains("https://allanime.day"))
+                                    .then(|| api.resolve_clock_urls(&url).unwrap())
+                                    .unwrap_or(url.to_string());
 
                                     let default_cmd = format!(
                                         "curl -L -H 'Referer: {}' -H 'User-Agent: {}' {} -O --progress-bar",
@@ -211,14 +218,20 @@ impl App {
                                     if player_cmd.contains("{url}") {
                                         player_cmd = player_cmd.replace("{url}", url);
                                     }
+                                    if player_cmd.contains("{referer}") {
+                                        player_cmd = player_cmd.replace("{referer}", &api.referer)
+                                    }
+                                    if player_cmd.contains("{user_agent}") {
+                                        player_cmd =
+                                            player_cmd.replace("{user_agent}", &api.user_agent)
+                                    }
 
-                                    let _ = terminal.clear();
+                                    // windows
+                                    #[cfg(not(unix))]
+                                    let (shell, flag) = ("cmd", "/C");
 
                                     #[cfg(unix)]
                                     let (shell, flag) = ("sh", "-c");
-
-                                    #[cfg(not(unix))]
-                                    let (shell, flag) = ("cmd", "/C");
 
                                     let cmd = Command::new(shell)
                                         .arg(flag)
@@ -415,8 +428,8 @@ impl App {
         let mut rows = Vec::new();
 
         for index in &self.rows_to_data_index {
-            let (provider_name, link) = &data[*index];
-            rows.push(Row::new(vec![provider_name.clone(), link.clone()]));
+            let (provider_name, _link) = &data[*index];
+            rows.push(Row::new(vec![provider_name.clone()]));
         }
 
         frame.render_stateful_widget(

@@ -10,7 +10,8 @@ case "$OS_NAME" in
     Linux)
         # Check if running inside Termux (Android)
         if [ -n "$PREFIX" ] && echo "$PREFIX" | grep -qi "termux"; then
-            PLATFORM="android"
+            PLATFORM="android";
+            export SHIO_PLAYER_CMD="termux-open {url} --content-type video"
         else
             PLATFORM="linux"
         fi
@@ -41,7 +42,7 @@ case "$MY_PLATFORM" in
         export SHIO_PLAYER_CMD="mpv {url}"
         ;;
     *)
-        export SHIO_PLAYER_CMD="mpv {url}"
+        export SHIO_PLAYER_CMD="xdg-open {url}"
         ;;
 esac
 

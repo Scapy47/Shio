@@ -178,23 +178,14 @@ impl Api {
                 raw_uri
             };
 
-            let uri = if uri.contains("/clock") && !uri.contains("/clock.json") {
-                uri.replace("/clock", "/clock.json")
-            } else {
-                uri
-            };
+            let uri = (uri.contains("/clock") && !uri.contains("/clock.json"))
+                .then(|| uri.replace("/clock", "/clock.json"))
+                .unwrap_or(uri);
 
-            let uri = if uri.starts_with("/apivtwo/") {
-                format!("https://allanime.day{}", uri)
-            } else {
-                uri
-            };
-
-            let uri = if uri.contains("clock.json") || uri.contains("https://allanime.day") {
-                self.resolve_clock_urls(&uri).unwrap_or(uri)
-            } else {
-                uri
-            };
+            let uri = uri
+                .starts_with("/apivtwo/")
+                .then(|| format!("https://allanime.day{}", uri))
+                .unwrap_or(uri);
 
             if self.debug {
                 unimplemented!()
@@ -206,7 +197,7 @@ impl Api {
         Ok((parsed.data.episode.episode_string, vec))
     }
 
-    fn resolve_clock_urls(&self, url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn resolve_clock_urls(&self, url: &str) -> Result<String, Box<dyn std::error::Error>> {
         let resp = self.agent.get(url).call()?;
         let json: serde_json::Value = resp.into_body().read_json()?;
 

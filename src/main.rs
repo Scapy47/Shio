@@ -62,6 +62,7 @@ enum View {
 }
 
 #[derive(Debug)]
+//  TODO: animated table selctor icon
 struct App {
     /// current view that is being rendered
     view: View,
@@ -71,10 +72,15 @@ struct App {
     args: Args,
     /// search bar input state
     input: Input,
+    ///
     api: Arc<Api>,
+    ///
     resp: ApiResponse,
+    ///
     matcher: Matcher,
+    ///
     rows_to_data_index: Vec<usize>,
+    ///
     table_state: TableState,
 }
 
@@ -134,7 +140,6 @@ impl App {
                 }
 
                 self.resp = api_resp;
-            } else {
             }
 
             if self.rows_to_data_index.is_empty() {
@@ -324,7 +329,9 @@ impl App {
     /// render the skeleton before data is there
     fn render_skeleton(&self, frame: &mut Frame) {
         frame.render_widget(
-            Block::bordered().border_type(BorderType::Rounded),
+            Paragraph::new(ASCII_ART)
+                .centered()
+                .block(Block::bordered().border_type(BorderType::Rounded)),
             frame.area(),
         );
     }
@@ -340,7 +347,7 @@ impl App {
                     .title_style(Style::new().bold())
                     .title_alignment(HorizontalAlignment::Center)
                     .border_type(BorderType::Rounded)
-                    .style(Style::new().cyan()),
+                    .style(Style::new().red()),
             ),
             area,
         );
@@ -376,9 +383,8 @@ impl App {
             rows.push(
                 Row::new(vec![
                     format!("{}\n{}", item.name, english_name),
-                    ep_count,
-                    item.id.clone(),
                     item.typename.clone(),
+                    ep_count,
                 ])
                 .height(2),
             );
@@ -388,12 +394,12 @@ impl App {
             Table::new(
                 rows,
                 [
-                    Constraint::Percentage(80),
-                    Constraint::Percentage(5),
+                    Constraint::Percentage(90),
                     Constraint::Percentage(5),
                     Constraint::Fill(1),
                 ],
             )
+            .style(Style::new().fg(Color::Cyan))
             .block(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
@@ -412,7 +418,7 @@ impl App {
 
         for index in &self.rows_to_data_index {
             let item = &data[*index];
-            rows.push(Row::new(vec![item.clone()]));
+            rows.push(Row::new(vec![item.clone()]).height(2));
         }
 
         frame.render_stateful_widget(
@@ -424,12 +430,17 @@ impl App {
         );
     }
 
-    fn render_episode_links(&mut self, frame: &mut Frame, area: Rect, data: Vec<(String, String)>) {
+    fn render_episode_providers(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        data: Vec<(String, String)>,
+    ) {
         let mut rows = Vec::new();
 
         for index in &self.rows_to_data_index {
             let (provider_name, _link) = &data[*index];
-            rows.push(Row::new(vec![provider_name.clone()]));
+            rows.push(Row::new(vec![provider_name.clone()]).height(4));
         }
 
         frame.render_stateful_widget(
@@ -471,7 +482,7 @@ impl App {
             View::Provider => {
                 if let ApiResponse::EpisodeLinksResp((_, links)) = &self.resp {
                     self.render_search_input(frame, top);
-                    self.render_episode_links(frame, bottom_left, links.clone());
+                    self.render_episode_providers(frame, bottom_left, links.clone());
                 }
             }
         }

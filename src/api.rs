@@ -1,3 +1,4 @@
+use clap::ValueEnum;
 use serde::Deserialize;
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
@@ -89,7 +90,7 @@ pub struct Api {
     pub debug: bool,
 }
 
-#[derive(Debug)]
+#[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum Mode {
     Sub,
     Dub,
@@ -172,7 +173,7 @@ impl Api {
             let uri = if raw_uri.starts_with("--") {
                 decrypt_url(&&raw_uri[2..])
             } else if raw_uri.starts_with("//") {
-                format!("http:{}", raw_uri)
+                format!("https:{}", raw_uri)
             } else {
                 raw_uri
             };
@@ -189,14 +190,35 @@ impl Api {
                 uri
             };
 
+            let uri = if uri.contains("clock.json") {
+                self.resolve_clock_urls(&uri).unwrap_or(uri)
+            } else {
+                uri
+            };
+
             if self.debug {
-                println!("-------------------------");
+                unimplemented!()
             }
 
             vec.push((provider_name, uri));
         }
 
         Ok((parsed.data.episode.episode_string, vec))
+    }
+
+    fn resolve_clock_urls(&self, url: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let resp = self.agent.get(url).call()?;
+        let json: serde_json::Value = resp.into_body().read_json()?;
+
+        if let Some(links_array) = json["links"].as_array() {
+            if let Some(first_item) = links_array.first() {
+                if let Some(wixmp_url) = first_item["link"].as_str() {
+                    return Ok(wixmp_url.to_string());
+                }
+            }
+        }
+
+        Err("Could not find 'link' field in clock.json response".into())
     }
 
     /// Get list of episodes available from api
@@ -228,10 +250,7 @@ impl Api {
         });
 
         if self.debug {
-            println!("-------------------------");
-            println!("\tID:    {}", parsed.data.show.id);
-            println!("\tEPISODES: {:?}", &episodes);
-            println!("-------------------------");
+            unimplemented!()
         }
 
         Ok((parsed.data.show.name, episodes, parsed.data.show.id))

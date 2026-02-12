@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, BorderType, Paragraph, Row, Table, TableState},
 };
 use std::{
+    env,
     process::Command,
     sync::{Arc, mpsc},
     thread,
@@ -27,10 +28,14 @@ use crate::{
 
 #[derive(Parser, Debug)]
 struct Args {
-    /// Name of the anime to search
+    /// Name of the anime
     name: String,
 
-    /// Print debuging info
+    /// in which mode sub, dub or raw (whatever is available)
+    #[arg(short)]
+    mode: Option<Mode>,
+
+    /// get debuging data
     #[arg(long)]
     debug: bool,
 }
@@ -76,16 +81,19 @@ struct App {
 impl App {
     fn new() -> Self {
         let args = Args::parse();
-        let api = Arc::new(Api::new(Mode::Sub, args.debug));
+        let mode = args.mode.unwrap_or(Mode::Sub);
+        let api = Arc::new(Api::new(mode, args.debug));
 
         Self {
             table_state: TableState::default(),
             args: args,
             input: Input::default(),
-            api: api,
+            api,
             matcher: Matcher::new(Config::DEFAULT),
             rows_to_data_index: Vec::new(),
-            resp: ApiResponse::Error("Error-001: Application has just initialized".to_string()),
+            resp: ApiResponse::Error(
+                "Error-001: Application has just initialized data is not there".to_string(),
+            ),
             exit: false,
             view: View::Loading,
         }
@@ -191,6 +199,8 @@ impl App {
                                     };
                                     let (_provider, url) = &links[self.rows_to_data_index[row]];
                                     let api = self.api.clone();
+
+                                    let player_cmd = env::var("SHIO_PLATER_CMD");
 
                                     let cmd = Command::new("curl")
                                         .arg("-L")

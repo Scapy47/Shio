@@ -7,7 +7,7 @@ use ureq::{Agent, RequestBuilder, typestate::WithoutBody};
 use crate::decrypt_url;
 
 //  NOTE: Response from search_anime()
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AnimeEdge {
     #[serde(rename = "_id")]

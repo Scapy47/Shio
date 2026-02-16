@@ -48,6 +48,13 @@ enum ApiResponse {
     EpisodeLinksResp((String, Vec<(String, String)>)),
 }
 
+#[derive(Debug, Default)]
+struct Resp {
+    search: Option<Vec<AnimeEdge>>,
+    episode_list: Option<(String, Vec<String>, String)>,
+    episode_provider_list: Option<(String, Vec<(String, String)>)>,
+}
+
 #[derive(Debug)]
 /// View of the app
 enum View {
@@ -64,6 +71,8 @@ enum View {
 #[derive(Debug)]
 //  TODO: animated table selctor icon
 struct App {
+    // select icon
+    select_icon: String,
     /// current view that is being rendered
     view: View,
     /// condition that is allowing loop to contine
@@ -75,7 +84,7 @@ struct App {
     ///
     api: Arc<Api>,
     ///
-    resp: ApiResponse,
+    resp: Resp,
     ///
     matcher: Matcher,
     ///
@@ -91,17 +100,27 @@ impl App {
         let api = Arc::new(Api::new(mode, args.debug));
 
         Self {
+            select_icon: String::default(),
             table_state: TableState::default(),
             args: args,
             input: Input::default(),
             api,
             matcher: Matcher::new(Config::DEFAULT),
             rows_to_data_index: Vec::new(),
-            resp: ApiResponse::Error(
-                "Error-001: Application has just initialized data is not there".to_string(),
-            ),
             exit: false,
             view: View::Loading,
+            resp: Resp::default(),
+        }
+    }
+
+    fn select_icon_animation(&mut self) {
+        let icon_s1 = ">> ".to_string();
+        let icon_s2 = ">>  ".to_string();
+
+        if self.select_icon.is_empty() || self.select_icon == icon_s2 {
+            self.select_icon = icon_s1
+        } else if self.select_icon == icon_s1 {
+            self.select_icon = icon_s2
         }
     }
 
@@ -120,26 +139,27 @@ impl App {
 
         while !self.exit {
             if let Ok(api_resp) = rx.try_recv() {
-                match &api_resp {
+                match api_resp {
                     ApiResponse::SearchResp(resp) => {
                         self.rows_to_data_index = (0..resp.len()).collect();
                         self.view = View::Search;
+                        self.resp.search = Some(resp);
                     }
-                    ApiResponse::EpisodeListResp((_, ep_list, _)) => {
-                        self.rows_to_data_index = (0..ep_list.len()).collect();
+                    ApiResponse::EpisodeListResp(resp) => {
+                        self.rows_to_data_index = (0..resp.1.len()).collect();
                         self.view = View::Episode;
+                        self.resp.episode_list = Some(resp);
                     }
-                    ApiResponse::EpisodeLinksResp((_, links)) => {
-                        self.rows_to_data_index = (0..links.len()).collect();
+                    ApiResponse::EpisodeLinksResp(resp) => {
+                        self.rows_to_data_index = (0..resp.1.len()).collect();
                         self.view = View::Provider;
+                        self.resp.episode_provider_list = Some(resp);
                     }
                     ApiResponse::Error(e) => {
                         println!("{}", e);
                         self.exit = true
                     }
                 }
-
-                self.resp = api_resp;
             }
 
             if self.rows_to_data_index.is_empty() {
@@ -147,6 +167,8 @@ impl App {
             }
 
             terminal.draw(|frame| self.render(frame))?;
+
+            self.select_icon_animation();
 
             if event::poll(Duration::from_millis(16))? {
                 let event = event::read()?;
@@ -160,7 +182,7 @@ impl App {
                         event::KeyCode::Enter => match self.view {
                             View::Loading => (),
                             View::Search => {
-                                if let ApiResponse::SearchResp(resp) = &self.resp {
+                                if let Some(resp) = &self.resp.search {
                                     let Some(row) = self.table_state.selected() else {
                                         return Ok(());
                                     };
@@ -177,7 +199,7 @@ impl App {
                                 }
                             }
                             View::Episode => {
-                                if let ApiResponse::EpisodeListResp((_, list, id)) = &self.resp {
+                                if let Some((_, list, id)) = &self.resp.episode_list {
                                     let Some(row) = self.table_state.selected() else {
                                         return Ok(());
                                     };
@@ -198,7 +220,7 @@ impl App {
                                 }
                             }
                             View::Provider => {
-                                if let ApiResponse::EpisodeLinksResp((_, links)) = &self.resp {
+                                if let Some((_, links)) = &self.resp.episode_provider_list {
                                     let _ = terminal.clear();
 
                                     let Some(row) = self.table_state.selected() else {
@@ -274,56 +296,50 @@ impl App {
 
         let mut buf = Vec::new();
 
-        match &self.resp {
-            ApiResponse::SearchResp(resp) => {
-                let mut matches_result: Vec<(usize, u32)> = resp
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(og_index, item)| {
-                        let haystack = Utf32Str::new(&item.name, &mut buf);
-
-                        pattern
-                            .score(haystack, &mut self.matcher)
-                            .map(|score| (og_index, score))
-                    })
-                    .collect();
-                matches_result.sort_by(|a, b| b.1.cmp(&a.1));
-                self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
-            }
-            ApiResponse::EpisodeListResp((_, ep_list, _)) => {
-                let mut matches_result: Vec<(usize, u32)> = ep_list
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(og_index, item)| {
-                        let haystack = Utf32Str::new(&item, &mut buf);
-
-                        pattern
-                            .score(haystack, &mut self.matcher)
-                            .map(|score| (og_index, score))
-                    })
-                    .collect();
-                matches_result.sort_by(|a, b| b.1.cmp(&a.1));
-                self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
-            }
-            ApiResponse::EpisodeLinksResp((_, links)) => {
-                let mut matches_result: Vec<(usize, u32)> = links
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(og_index, (provider_name, _link))| {
-                        let haystack = Utf32Str::new(&provider_name, &mut buf);
-
-                        pattern
-                            .score(haystack, &mut self.matcher)
-                            .map(|score| (og_index, score))
-                    })
-                    .collect();
-                matches_result.sort_by(|a, b| b.1.cmp(&a.1));
-                self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
-            }
-            ApiResponse::Error(_) => {
-                return;
-            }
+        if let Some(resp) = &self.resp.search {
+            let mut matches_result: Vec<(usize, u32)> = resp
+                .iter()
+                .enumerate()
+                .filter_map(|(og_index, item)| {
+                    let haystack = Utf32Str::new(&item.name, &mut buf);
+                    pattern
+                        .score(haystack, &mut self.matcher)
+                        .map(|score| (og_index, score))
+                })
+                .collect();
+            matches_result.sort_by(|a, b| b.1.cmp(&a.1));
+            self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
         };
+
+        if let Some((_, resp, _)) = &self.resp.episode_list {
+            let mut matches_result: Vec<(usize, u32)> = resp
+                .iter()
+                .enumerate()
+                .filter_map(|(og_index, item)| {
+                    let haystack = Utf32Str::new(&item, &mut buf);
+                    pattern
+                        .score(haystack, &mut self.matcher)
+                        .map(|score| (og_index, score))
+                })
+                .collect();
+            matches_result.sort_by(|a, b| b.1.cmp(&a.1));
+            self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
+        };
+
+        if let Some((_, resp)) = &self.resp.episode_provider_list {
+            let mut matches_result: Vec<(usize, u32)> = resp
+                .iter()
+                .enumerate()
+                .filter_map(|(og_index, item)| {
+                    let haystack = Utf32Str::new(&item.0, &mut buf);
+                    pattern
+                        .score(haystack, &mut self.matcher)
+                        .map(|score| (og_index, score))
+                })
+                .collect();
+            matches_result.sort_by(|a, b| b.1.cmp(&a.1));
+            self.rows_to_data_index = matches_result.into_iter().map(|(i, _)| i).collect();
+        }
     }
 
     /// render the skeleton before data is there
@@ -359,16 +375,13 @@ impl App {
     }
 
     fn render_search_result(&mut self, frame: &mut Frame, area: Rect) {
-        let search_resp_vec = match &self.resp {
-            ApiResponse::SearchResp(resp) => resp,
-            _ => {
-                return;
-            }
+        let Some(data) = &self.resp.search else {
+            return;
         };
 
         let mut rows = vec![];
         for index in &self.rows_to_data_index {
-            let item = &search_resp_vec[*index];
+            let item = &data[*index];
 
             let ep_count = item
                 .available_episodes
@@ -406,7 +419,7 @@ impl App {
                     .title("Results")
                     .title_alignment(HorizontalAlignment::Center),
             )
-            .highlight_symbol("» ")
+            .highlight_symbol(self.select_icon.to_string())
             .row_highlight_style(Style::new().bg(Color::Cyan).fg(Color::Black)),
             area,
             &mut self.table_state,
@@ -415,7 +428,6 @@ impl App {
 
     fn render_episode_list(&mut self, frame: &mut Frame, area: Rect, data: Vec<String>) {
         let mut rows = Vec::new();
-
         for index in &self.rows_to_data_index {
             let item = &data[*index];
             rows.push(Row::new(vec![item.clone()]).height(2));
@@ -437,7 +449,6 @@ impl App {
         data: Vec<(String, String)>,
     ) {
         let mut rows = Vec::new();
-
         for index in &self.rows_to_data_index {
             let (provider_name, _link) = &data[*index];
             rows.push(Row::new(vec![provider_name.clone()]).height(4));
@@ -466,21 +477,21 @@ impl App {
         match self.view {
             View::Loading => self.render_skeleton(frame),
             View::Search => {
-                if let ApiResponse::SearchResp(_) = &self.resp {
+                if let Some(_) = &self.resp.search {
                     self.render_search_input(frame, top);
                     self.render_search_result(frame, bottom_left);
                     self.render_side_menu(frame, bottom_right);
                 }
             }
             View::Episode => {
-                if let ApiResponse::EpisodeListResp((_, ep_list, _)) = &self.resp {
+                if let Some((_, ep_list, _)) = &self.resp.episode_list {
                     self.render_search_input(frame, top);
                     self.render_episode_list(frame, bottom_left, ep_list.clone());
                     self.render_side_menu(frame, bottom_right);
                 }
             }
             View::Provider => {
-                if let ApiResponse::EpisodeLinksResp((_, links)) = &self.resp {
+                if let Some((_, links)) = &self.resp.episode_provider_list {
                     self.render_search_input(frame, top);
                     self.render_episode_providers(frame, bottom_left, links.clone());
                 }

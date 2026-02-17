@@ -40,21 +40,29 @@ export SHIO_PLAYER_CMD="mpv --user-agent={user_agent} --http-header-fields='Refe
 
 ### Installation
 
-Download the files for your os from release and extract it.
+Download the binary for your OS from the [Releases](https://github.com/scapy_47/shio/releases) page.
+
+**Linux / macOS**
+
+1.  Rename the downloaded file (e.g., `shio-Linux-x86_64`) to `shio`.
+2.  Make it executable.
+3.  Move it to your `$PATH` (e.g., `~/.local/bin`).
 
 ```sh
-tar -xvzf <file>.tar.gz --one-top-level="temp"
-```
+# 1. Rename (Replace filename with the one you downloaded)
+mv shio-Linux-x86_64 shio
 
-```sh
-unzip <file>.zip -d "temp"
-```
-
-make binary file executable
-
-```sh
+# 2. Make executable
 chmod u+x shio
+
+# 3. Move to path
+mkdir -p ~/.local/bin
+mv shio ~/.local/bin/
 ```
 
-add binary to `$PATH`. Recommended approach to move the binary to `$XDG_BIN_HOME` or `~/.local/bin` as most systems automatically include this directory in `$PATH`.
-Alternatively, you can run the binary directly.
+**Windows**
+
+1. Download shio-Windows-x86_64.exe.
+2. Rename it to shio.exe.
+3. Move it to a folder in your System PATH or run it directly from PowerShell/CMD.
+

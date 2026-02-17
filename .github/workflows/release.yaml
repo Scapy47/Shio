@@ -8,36 +8,62 @@ on:
     branches:
       - release
 
+env:
+  BIN_NAME: shio
+
 jobs:
   build:
-    name: Build ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.os_name }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-musl
-          - x86_64-pc-windows-gnu
-          - x86_64-apple-darwin
+        include:
+          - os_name: Linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ""
+          
+          - os_name: Windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: ".exe"
+            
+          - os_name: macOS-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            suffix: ""
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Compile and Package
-        id: compile
-        uses: rust-build/rust-build.action@v1.4.5
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          RUSTTARGET: ${{ matrix.target }}
-          UPLOAD_MODE: none
-          SRC_DIR: "."
+          targets: "${{ matrix.target }}"
 
-      - name: Upload Artifact
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename Binary
+        shell: bash
+        run: |
+          # 1. Source path (where cargo puts it)
+          SRC="target/${{ matrix.target }}/release/${{ env.BIN_NAME }}${{ matrix.suffix }}"
+          
+          # 2. Dest path (Unique name: my-app-Windows-x86_64.exe)
+          DST="${{ env.BIN_NAME }}-${{ matrix.os_name }}${{ matrix.suffix }}"
+          
+          # 3. Copy and print for debugging
+          cp "$SRC" "$DST"
+          echo "Created $DST"
+
+      - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.target }}
-          path: |
-            ${{ steps.compile.outputs.BUILT_ARCHIVE }}
-            ${{ steps.compile.outputs.BUILT_CHECKSUM }}
+          name: binary-${{ matrix.os_name }}
+          path: ${{ env.BIN_NAME }}-${{ matrix.os_name }}${{ matrix.suffix }}
 
   release:
     name: Publish Release

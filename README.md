@@ -5,6 +5,8 @@
     </div>
 </div>
 
+[![blazingly fast](https://www.blazingly.fast/api/badge.svg?repo=Scapy47%2FShio)](https://www.blazingly.fast)
+
 ## Quick Links
 
 - [intro](#Introduction)

@@ -15,7 +15,7 @@ use std::{
     process::Command,
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tui_input::{Input, backend::crossterm::EventHandler};
 
@@ -40,14 +40,6 @@ struct Args {
     debug: bool,
 }
 
-#[derive(Debug)]
-enum ApiResponse {
-    Error(String),
-    SearchResp(Vec<AnimeEdge>),
-    EpisodeListResp((String, Vec<String>, String)),
-    EpisodeLinksResp((String, Vec<(String, String)>)),
-}
-
 #[derive(Debug, Default)]
 struct Resp {
     search: Option<Vec<AnimeEdge>>,
@@ -69,7 +61,6 @@ enum View {
 }
 
 #[derive(Debug)]
-//  TODO: animated table selctor icon
 struct App {
     // select icon
     select_icon: String,
@@ -91,6 +82,8 @@ struct App {
     rows_to_data_index: Vec<usize>,
     ///
     table_state: TableState,
+    //
+    ui_loop_tick: Instant,
 }
 
 impl App {
@@ -110,54 +103,63 @@ impl App {
             exit: false,
             view: View::Loading,
             resp: Resp::default(),
+            ui_loop_tick: Instant::now(),
         }
     }
 
     fn select_icon_animation(&mut self) {
-        let icon_s1 = ">> ".to_string();
-        let icon_s2 = ">>  ".to_string();
+        let icon_s1 = " => ".to_string();
+        let icon_s2 = "    ".to_string();
 
-        if self.select_icon.is_empty() || self.select_icon == icon_s2 {
-            self.select_icon = icon_s1
-        } else if self.select_icon == icon_s1 {
-            self.select_icon = icon_s2
+        let now = Instant::now();
+
+        if now.duration_since(self.ui_loop_tick) >= Duration::from_millis(300) {
+            if self.select_icon.is_empty() || self.select_icon == icon_s2 {
+                self.select_icon = icon_s1
+            } else if self.select_icon == icon_s1 {
+                self.select_icon = icon_s2
+            }
+            self.ui_loop_tick = now;
         }
     }
 
     fn main_loop(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
-        let (tx, rx) = mpsc::channel::<ApiResponse>();
+        let (tx, rx) = mpsc::channel::<Option<Resp>>();
 
         let api_clone = self.api.clone();
         let name = self.args.name.clone();
         let tx_clone = tx.clone();
         thread::spawn(move || match api_clone.search_anime(name) {
-            Ok(resp) => tx_clone.send(ApiResponse::SearchResp(resp.data.shows.edges)),
-            Err(e) => tx_clone.send(ApiResponse::Error(e.to_string())),
+            Ok(resp) => tx_clone.send(Some(Resp {
+                search: Some(resp.data.shows.edges),
+                ..Default::default()
+            })),
+            Err(e) => {
+                let _ = tx_clone.send(None);
+                panic!("Error getting search results: {}", e);
+            }
         });
-
-        self.table_state.select(Some(0));
 
         while !self.exit {
             if let Ok(api_resp) = rx.try_recv() {
-                match api_resp {
-                    ApiResponse::SearchResp(resp) => {
-                        self.rows_to_data_index = (0..resp.len()).collect();
-                        self.view = View::Search;
-                        self.resp.search = Some(resp);
+                if let Some(resp) = api_resp {
+                    if let Some(search_resp) = resp.search {
+                        self.rows_to_data_index = (0..search_resp.len()).collect();
+                        self.resp.search = Some(search_resp);
+                        self.table_state.select(Some(0));
+                        self.view = View::Search
                     }
-                    ApiResponse::EpisodeListResp(resp) => {
-                        self.rows_to_data_index = (0..resp.1.len()).collect();
-                        self.view = View::Episode;
-                        self.resp.episode_list = Some(resp);
+                    if let Some(ep_list_resp) = resp.episode_list {
+                        self.rows_to_data_index = (0..ep_list_resp.1.len()).collect();
+                        self.resp.episode_list = Some(ep_list_resp);
+                        self.table_state.select(Some(0));
+                        self.view = View::Episode
                     }
-                    ApiResponse::EpisodeLinksResp(resp) => {
-                        self.rows_to_data_index = (0..resp.1.len()).collect();
-                        self.view = View::Provider;
-                        self.resp.episode_provider_list = Some(resp);
-                    }
-                    ApiResponse::Error(e) => {
-                        println!("{}", e);
-                        self.exit = true
+                    if let Some(ep_provider_list_resp) = resp.episode_provider_list {
+                        self.rows_to_data_index = (0..ep_provider_list_resp.1.len()).collect();
+                        self.resp.episode_provider_list = Some(ep_provider_list_resp);
+                        self.table_state.select(Some(0));
+                        self.view = View::Provider
                     }
                 }
             }
@@ -191,10 +193,14 @@ impl App {
                                     let tx_clone = tx.clone();
                                     let api_clone = self.api.clone();
                                     thread::spawn(move || match api_clone.get_episode_list(&id) {
-                                        Ok(resp) => {
-                                            tx_clone.send(ApiResponse::EpisodeListResp(resp))
+                                        Ok(resp) => tx_clone.send(Some(Resp {
+                                            episode_list: Some(resp),
+                                            ..Default::default()
+                                        })),
+                                        Err(e) => {
+                                            let _ = tx_clone.send(None);
+                                            panic!("Error getting episode list: {}", e);
                                         }
-                                        Err(e) => tx_clone.send(ApiResponse::Error(e.to_string())),
                                     });
                                 }
                             }
@@ -209,11 +215,13 @@ impl App {
                                     let api_clone = self.api.clone();
                                     thread::spawn(move || {
                                         match api_clone.get_episode_links(&id_clone, &ep) {
-                                            Ok(resp) => {
-                                                tx_clone.send(ApiResponse::EpisodeLinksResp(resp))
-                                            }
+                                            Ok(resp) => tx_clone.send(Some(Resp {
+                                                episode_provider_list: Some(resp),
+                                                ..Default::default()
+                                            })),
                                             Err(e) => {
-                                                tx_clone.send(ApiResponse::Error(e.to_string()))
+                                                let _ = tx_clone.send(None);
+                                                panic!("Error getting episode links: {}", e);
                                             }
                                         }
                                     });
@@ -435,7 +443,7 @@ impl App {
 
         frame.render_stateful_widget(
             Table::new(rows, [Constraint::Fill(1)])
-                .highlight_symbol("» ")
+                .highlight_symbol(self.select_icon.to_string())
                 .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
             area,
             &mut self.table_state,
@@ -456,7 +464,7 @@ impl App {
 
         frame.render_stateful_widget(
             Table::new(rows, [Constraint::Percentage(10), Constraint::Fill(1)])
-                .highlight_symbol("» ")
+                .highlight_symbol(self.select_icon.to_string())
                 .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
             area,
             &mut self.table_state,

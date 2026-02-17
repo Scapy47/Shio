@@ -28,14 +28,15 @@ use crate::{
 
 #[derive(Parser, Debug)]
 struct Args {
-    /// Name of the anime
+    /// Name of the anime.
+    #[arg()]
     name: String,
 
-    /// in which mode sub, dub or raw (whatever is available)
+    /// which mode sub, dub or raw (whatever is available).
     #[arg(short)]
     mode: Option<Mode>,
 
-    /// get debuging data
+    /// get debuging data.
     #[arg(long)]
     debug: bool,
 }
@@ -285,6 +286,7 @@ impl App {
                         _ => {
                             self.input.handle_event(&event);
                             self.update_row_to_data_index();
+                            self.table_state.select(Some(0));
                         }
                     }
                 }
@@ -443,6 +445,13 @@ impl App {
 
         frame.render_stateful_widget(
             Table::new(rows, [Constraint::Fill(1)])
+                .style(Style::new().fg(Color::Cyan))
+                .block(
+                    Block::bordered()
+                        .border_type(BorderType::Rounded)
+                        .title("episodes")
+                        .title_alignment(HorizontalAlignment::Center),
+                )
                 .highlight_symbol(self.select_icon.to_string())
                 .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
             area,
@@ -464,6 +473,13 @@ impl App {
 
         frame.render_stateful_widget(
             Table::new(rows, [Constraint::Percentage(10), Constraint::Fill(1)])
+                .style(Style::new().fg(Color::Cyan))
+                .block(
+                    Block::bordered()
+                        .border_type(BorderType::Rounded)
+                        .title("provider")
+                        .title_alignment(HorizontalAlignment::Center),
+                )
                 .highlight_symbol(self.select_icon.to_string())
                 .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
             area,
@@ -471,37 +487,40 @@ impl App {
         );
     }
 
-    fn render_side_menu(&self, frame: &mut Frame, area: Rect) {
-        frame.render_widget(Paragraph::new(ASCII_ART).centered(), area);
-    }
+    // fn render_side_menu(&self, frame: &mut Frame, area: Rect) {
+    //     frame.render_widget(Paragraph::new(ASCII_ART).centered(), area);
+    // }
 
     fn render(&mut self, frame: &mut Frame) {
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(10), Constraint::Fill(1)]).areas(frame.area());
 
-        let [bottom_left, bottom_right] =
-            Layout::horizontal([Constraint::Percentage(70), Constraint::Fill(1)]).areas(bottom);
+        // let [bottom_left, bottom_right] =
+        //     Layout::horizontal([Constraint::Percentage(70), Constraint::Fill(1)]).areas(bottom);
 
         match self.view {
             View::Loading => self.render_skeleton(frame),
             View::Search => {
                 if let Some(_) = &self.resp.search {
                     self.render_search_input(frame, top);
-                    self.render_search_result(frame, bottom_left);
-                    self.render_side_menu(frame, bottom_right);
+                    self.render_search_result(frame, bottom);
+                    // self.render_search_result(frame, bottom_left);
+                    // self.render_side_menu(frame, bottom_right);
                 }
             }
             View::Episode => {
                 if let Some((_, ep_list, _)) = &self.resp.episode_list {
                     self.render_search_input(frame, top);
-                    self.render_episode_list(frame, bottom_left, ep_list.clone());
-                    self.render_side_menu(frame, bottom_right);
+                    self.render_episode_list(frame, bottom, ep_list.clone());
+                    // self.render_episode_list(frame, bottom_left, ep_list.clone());
+                    // self.render_side_menu(frame, bottom_right);
                 }
             }
             View::Provider => {
                 if let Some((_, links)) = &self.resp.episode_provider_list {
                     self.render_search_input(frame, top);
-                    self.render_episode_providers(frame, bottom_left, links.clone());
+                    self.render_episode_providers(frame, bottom, links.clone());
+                    // self.render_episode_providers(frame, bottom_left, links.clone());
                 }
             }
         }

@@ -363,9 +363,6 @@ impl App {
     }
 
     fn render_search_input(&self, frame: &mut Frame, area: Rect) {
-        let width = area.width.max(2) - 2;
-        let scroll = self.input.visual_scroll(width as usize);
-
         frame.render_widget(
             Paragraph::new(self.input.value()).block(
                 Block::bordered()
@@ -377,6 +374,9 @@ impl App {
             ),
             area,
         );
+
+        let width = area.width.max(2) - 2;
+        let scroll = self.input.visual_scroll(width as usize);
 
         let cursor_x = area.x + 1 + (self.input.visual_cursor().max(scroll) - scroll) as u16;
         let cursor_y = area.y + 1;
@@ -493,7 +493,7 @@ impl App {
 
     fn render(&mut self, frame: &mut Frame) {
         let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(10), Constraint::Fill(1)]).areas(frame.area());
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(frame.area());
 
         // let [bottom_left, bottom_right] =
         //     Layout::horizontal([Constraint::Percentage(70), Constraint::Fill(1)]).areas(bottom);

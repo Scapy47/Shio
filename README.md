@@ -17,7 +17,7 @@
 ## Quick Links
 
 - [intro](#Introduction)
-- [Quickstart](#Getting-started)
+- [Getting started](#Getting-started)
 
 ## Introduction
 

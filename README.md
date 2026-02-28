@@ -2,10 +2,17 @@
     <div align="center">
         <h1>Shio</h1>
         <p>inspired by <a href="https://github.com/pystardust/ani-cli">ani-cli from pystardust</a></p>
+        <p>
+            <img src="https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white" alt="Rust" />
+            <a href="https://www.blazingly.fast">
+                <img src="https://www.blazingly.fast/api/badge.svg?repo=Scapy47%2FShio" alt="blazingly fast" />
+            </a>
+            <a href="https://github.com/Scapy47/Shio/actions/workflows/release.yaml">
+                <img src="https://github.com/Scapy47/Shio/actions/workflows/release.yaml/badge.svg" alt="Build and Release" />
+            </a>
+        </p>
     </div>
 </div>
-
-[![blazingly fast](https://www.blazingly.fast/api/badge.svg?repo=Scapy47%2FShio)](https://www.blazingly.fast)
 
 ## Quick Links
 

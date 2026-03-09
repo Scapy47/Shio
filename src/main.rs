@@ -356,24 +356,18 @@ impl App {
 
     fn render_search_input(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(
-            Paragraph::new(self.input.value()).block(
-                Block::bordered()
-                    .title("Search")
-                    .title_style(Style::new().bold())
-                    .title_alignment(HorizontalAlignment::Center)
-                    .border_type(BorderType::Rounded)
-                    .style(Style::new().red()),
-            ),
+            Paragraph::new(self.input.value())
+                .alignment(HorizontalAlignment::Center)
+                .block(
+                    Block::bordered()
+                        .title("Search")
+                        .title_style(Style::new().bold())
+                        .title_alignment(HorizontalAlignment::Center)
+                        .border_type(BorderType::Rounded)
+                        .style(Style::new().red()),
+                ),
             area,
         );
-
-        let width = area.width.max(2) - 2;
-        let scroll = self.input.visual_scroll(width as usize);
-
-        let cursor_x = area.x + 1 + (self.input.visual_cursor().max(scroll) - scroll) as u16;
-        let cursor_y = area.y + 1;
-
-        frame.set_cursor_position((cursor_x, cursor_y));
     }
 
     fn render_search_result(&mut self, frame: &mut Frame, area: Rect) {
@@ -403,13 +397,24 @@ impl App {
                             item.name.as_str(),
                             Style::new().magenta().bold(),
                         )),
-                        Line::from(Span::styled(english_name, Style::new().red().bold())),
+                        Line::from(Span::styled(
+                            if english_name != item.name {
+                                english_name
+                            } else {
+                                ""
+                            },
+                            Style::new().red().bold(),
+                        )),
                     ]),
                     Cell::from(Span::styled(ep_count, Style::new().bold())),
                 ])
                 .height(3),
             );
         }
+
+        let header = Row::new(vec!["#", "Name", "Episodes"])
+            .style(Style::default().bold().yellow())
+            .bottom_margin(1);
 
         frame.render_stateful_widget(
             Table::new(
@@ -420,6 +425,7 @@ impl App {
                     Constraint::Fill(1),
                 ],
             )
+            .header(header)
             .style(Style::new().fg(Color::Cyan))
             .block(
                 Block::bordered()
@@ -477,44 +483,62 @@ impl App {
         frame.render_stateful_widget(
             Table::new(rows, [Constraint::Percentage(10), Constraint::Fill(1)])
                 .style(Style::new().fg(Color::Cyan))
+                .highlight_symbol(self.select_icon.to_string())
+                .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black))
                 .block(
                     Block::bordered()
                         .border_type(BorderType::Rounded)
                         .title("provider")
                         .title_alignment(HorizontalAlignment::Center),
-                )
-                .highlight_symbol(self.select_icon.to_string())
-                .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
+                ),
             area,
             &mut self.table_state,
         );
     }
 
+    fn render_footer(&self, frame: &mut Frame, area: Rect, text: &str) {
+        frame.render_widget(
+            Paragraph::new(text)
+                .alignment(HorizontalAlignment::Center)
+                .block(
+                    Block::bordered()
+                        .border_type(BorderType::Rounded)
+                        .style(Style::new().red()),
+                ),
+            area,
+        );
+    }
+
     fn render(&mut self, frame: &mut Frame) {
-        let [top, bottom] =
-            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(frame.area());
+        let [top, middle, bottom] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Fill(1),
+            Constraint::Length(3),
+        ])
+        .areas(frame.area());
+
+        self.render_search_input(frame, top);
 
         match self.view {
             View::Loading => self.render_skeleton(frame),
             View::Search => {
                 if self.resp.search.is_some() {
-                    self.render_search_input(frame, top);
-                    self.render_search_result(frame, bottom);
+                    self.render_search_result(frame, middle);
                 }
             }
             View::Episode => {
                 if self.resp.episode_list.is_some() {
-                    self.render_search_input(frame, top);
-                    self.render_episode_list(frame, bottom);
+                    self.render_episode_list(frame, middle);
                 }
             }
             View::Provider => {
                 if self.resp.episode_provider_list.is_some() {
-                    self.render_search_input(frame, top);
-                    self.render_episode_providers(frame, bottom);
+                    self.render_episode_providers(frame, middle);
                 }
             }
         }
+
+        self.render_footer(frame, bottom, "hello world");
     }
 }
 

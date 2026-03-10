@@ -142,18 +142,21 @@ impl App {
                     self.rows_to_data_index = (0..search_resp.len()).collect();
                     self.resp.search = Some(search_resp);
                     self.table_state.select(Some(0));
+                    self.input.reset();
                     self.view = View::Search
                 }
                 if let Some(ep_list_resp) = resp.episode_list {
                     self.rows_to_data_index = (0..ep_list_resp.1.len()).collect();
                     self.resp.episode_list = Some(ep_list_resp);
                     self.table_state.select(Some(0));
+                    self.input.reset();
                     self.view = View::Episode
                 }
                 if let Some(ep_provider_list_resp) = resp.episode_provider_list {
                     self.rows_to_data_index = (0..ep_provider_list_resp.1.len()).collect();
                     self.resp.episode_provider_list = Some(ep_provider_list_resp);
                     self.table_state.select(Some(0));
+                    self.input.reset();
                     self.view = View::Provider
                 }
             }
@@ -172,9 +175,17 @@ impl App {
                     match key.code {
                         event::KeyCode::Esc => return Ok(()),
                         event::KeyCode::Down => self.table_state.select_next(),
+                        event::KeyCode::Char('j')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            self.table_state.select_next()
+                        }
                         event::KeyCode::Up => self.table_state.select_previous(),
-                        event::KeyCode::Left => self.table_state.select_next_column(),
-                        event::KeyCode::Right => self.table_state.select_previous_column(),
+                        event::KeyCode::Char('k')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            self.table_state.select_previous()
+                        }
                         event::KeyCode::Enter => match self.view {
                             View::Loading => (),
                             View::Search => {
@@ -303,7 +314,13 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter_map(|(og_index, item)| {
-                    let haystack = Utf32Str::new(&item.name, &mut buf);
+                    let name = if let Some(english_name) = &item.english_name {
+                        format!("{} {}", item.name, english_name)
+                    } else {
+                        item.name.clone()
+                    };
+
+                    let haystack = Utf32Str::new(name.as_str(), &mut buf);
                     pattern
                         .score(haystack, &mut self.matcher)
                         .map(|score| (og_index, score))
@@ -344,27 +361,31 @@ impl App {
         }
     }
 
-    /// render the skeleton before data is there
-    fn render_skeleton(&self, frame: &mut Frame) {
-        frame.render_widget(
-            Paragraph::new(ASCII_ART)
-                .centered()
-                .block(Block::bordered().border_type(BorderType::Rounded)),
-            frame.area(),
-        );
-    }
-
     fn render_search_input(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(
             Paragraph::new(self.input.value())
                 .alignment(HorizontalAlignment::Center)
                 .block(
                     Block::bordered()
-                        .title("Search")
-                        .title_style(Style::new().bold())
-                        .title_alignment(HorizontalAlignment::Center)
-                        .border_type(BorderType::Rounded)
-                        .style(Style::new().red()),
+                        .title("Fuzzy search")
+                        .title_style(Style::new().green().bold())
+                        .style(Style::new().red())
+                        .border_type(BorderType::Rounded),
+                ),
+            area,
+        );
+    }
+
+    /// render the skeleton before data is there
+    fn render_skeleton(&self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(
+            Paragraph::new(ASCII_ART)
+                .style(Style::default().bold().cyan())
+                .centered()
+                .block(
+                    Block::bordered()
+                        .style(Style::new().red())
+                        .border_type(BorderType::Rounded),
                 ),
             area,
         );
@@ -391,7 +412,10 @@ impl App {
 
             rows.push(
                 Row::new(vec![
-                    Cell::from(Span::raw(index.to_string())),
+                    Cell::from(
+                        Line::styled((index + 1).to_string(), Style::default().bold())
+                            .alignment(HorizontalAlignment::Center),
+                    ),
                     Cell::from(vec![
                         Line::from(Span::styled(
                             item.name.as_str(),
@@ -406,15 +430,22 @@ impl App {
                             Style::new().red().bold(),
                         )),
                     ]),
-                    Cell::from(Span::styled(ep_count, Style::new().bold())),
+                    Cell::from(
+                        Line::styled(ep_count, Style::new().bold())
+                            .alignment(HorizontalAlignment::Center),
+                    ),
                 ])
                 .height(3),
             );
         }
 
-        let header = Row::new(vec!["#", "Name", "Episodes"])
-            .style(Style::default().bold().yellow())
-            .bottom_margin(1);
+        let header = Row::new(vec![
+            Line::from("#").alignment(HorizontalAlignment::Center),
+            Line::from("Name").alignment(HorizontalAlignment::Center),
+            Line::from("Episodes").alignment(HorizontalAlignment::Center),
+        ])
+        .style(Style::default().bold().yellow())
+        .bottom_margin(1);
 
         frame.render_stateful_widget(
             Table::new(
@@ -427,14 +458,9 @@ impl App {
             )
             .header(header)
             .style(Style::new().fg(Color::Cyan))
-            .block(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title("Results")
-                    .title_alignment(HorizontalAlignment::Center),
-            )
             .highlight_symbol(self.select_icon.to_string())
-            .row_highlight_style(Style::new().bg(Color::Cyan).fg(Color::Black)),
+            .row_highlight_style(Style::new().bg(Color::Cyan).fg(Color::Black))
+            .block(Block::bordered().border_type(BorderType::Rounded)),
             area,
             &mut self.table_state,
         );
@@ -448,57 +474,71 @@ impl App {
         let mut rows = Vec::new();
         for index in &self.rows_to_data_index {
             let item = ep_list[*index].as_str();
-            rows.push(Row::new(vec![Span::styled(item, Style::new().red().bold())]).height(3));
+            rows.push(
+                Row::new(vec![
+                    Line::styled(item, Style::new().red().bold())
+                        .alignment(HorizontalAlignment::Center),
+                ])
+                .height(2),
+            );
         }
+
+        let header = Row::new(vec![
+            Line::from("Episodes").alignment(HorizontalAlignment::Center),
+        ])
+        .style(Style::default().bold().yellow())
+        .bottom_margin(1);
 
         frame.render_stateful_widget(
             Table::new(rows, [Constraint::Fill(1)])
+                .header(header)
                 .style(Style::new().fg(Color::Cyan))
-                .block(
-                    Block::bordered()
-                        .border_type(BorderType::Rounded)
-                        .title("episodes")
-                        .title_alignment(HorizontalAlignment::Center),
-                )
                 .highlight_symbol(self.select_icon.to_string())
-                .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black)),
+                .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black))
+                .block(Block::bordered().border_type(BorderType::Rounded)),
             area,
             &mut self.table_state,
         );
     }
 
     fn render_episode_providers(&mut self, frame: &mut Frame, area: Rect) {
-        let Some((_, links)) = &self.resp.episode_provider_list else {
+        let Some((_, links_list)) = &self.resp.episode_provider_list else {
             return;
         };
 
         let mut rows = Vec::new();
         for index in &self.rows_to_data_index {
-            let (provider_name, _link) = &links[*index];
+            let (provider_name, _link) = &links_list[*index];
             rows.push(
-                Row::new(vec![Span::styled(provider_name, Style::new().red().bold())]).height(3),
+                Row::new(vec![
+                    Line::styled(provider_name, Style::new().red().bold())
+                        .alignment(HorizontalAlignment::Center),
+                ])
+                .height(2),
             );
         }
 
+        let header = Row::new(vec![
+            Line::from("Provider").alignment(HorizontalAlignment::Center),
+        ])
+        .style(Style::default().bold().yellow())
+        .bottom_margin(1);
+
         frame.render_stateful_widget(
-            Table::new(rows, [Constraint::Percentage(10), Constraint::Fill(1)])
+            Table::new(rows, [Constraint::Fill(1)])
+                .header(header)
                 .style(Style::new().fg(Color::Cyan))
                 .highlight_symbol(self.select_icon.to_string())
                 .row_highlight_style(Style::new().bg(Color::LightCyan).fg(Color::Black))
-                .block(
-                    Block::bordered()
-                        .border_type(BorderType::Rounded)
-                        .title("provider")
-                        .title_alignment(HorizontalAlignment::Center),
-                ),
+                .block(Block::bordered().border_type(BorderType::Rounded)),
             area,
             &mut self.table_state,
         );
     }
 
-    fn render_footer(&self, frame: &mut Frame, area: Rect, text: &str) {
+    fn render_footer(&self, frame: &mut Frame, area: Rect, line: Line) {
         frame.render_widget(
-            Paragraph::new(text)
+            Paragraph::new(line)
                 .alignment(HorizontalAlignment::Center)
                 .block(
                     Block::bordered()
@@ -520,7 +560,7 @@ impl App {
         self.render_search_input(frame, top);
 
         match self.view {
-            View::Loading => self.render_skeleton(frame),
+            View::Loading => self.render_skeleton(frame, middle),
             View::Search => {
                 if self.resp.search.is_some() {
                     self.render_search_result(frame, middle);
@@ -538,7 +578,22 @@ impl App {
             }
         }
 
-        self.render_footer(frame, bottom, "hello world");
+        self.render_footer(
+            frame,
+            bottom,
+            Line::from(vec![
+                Span::raw("Move "),
+                Span::styled("up / down ", Style::default().bold().yellow()),
+                Span::raw("using "),
+                Span::styled("↑ / ctrl + k ", Style::default().bold().yellow()),
+                Span::raw("and "),
+                Span::styled("↓ / ctrl + j ", Style::default().bold().yellow()),
+                Span::raw("keys, "),
+                Span::raw("press "),
+                Span::styled("Enter ", Style::default().bold().green()),
+                Span::raw("select"),
+            ]),
+        );
     }
 }
 

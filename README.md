@@ -26,18 +26,15 @@
 
 ## Introduction
 
-**Shio** is a blazingly fast command-line TUI anime search and browser application. that allows you to discover, browse, and watch anime directly from your terminal — no browser required.
+**Shio** is a blazingly fast TUI anime browser. written in rust inspired by **ani-cli** this is complete rewrite of original shell script, with help of original source code as a reference. although Shio is a rewrite aims to be different from ani-cli.
 
 ### Features
-
-- 🔍 Search for anime instantly
-- 📺 Browse titles through an interactive TUI
-- ▶️ Stream and watch episodes from the command line
-- 🎬 Supports any video player with a command-line interface (CLI)
-- ⚡ Fast, lightweight, and keyboard-driven experience
-
-
-Built for those who want a seamless experience without ever leaving the terminal.
+- simple and elegant TUI
+- vim keybinds `J` and `K`
+- supports sub, dub and raw audios
+- back in fourth navigation in TUI
+- no hard-coded [player](###Setup-Player)
+- no external dependency other then player (and curl maybe)
 
 ## Getting Started
 

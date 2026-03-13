@@ -394,7 +394,7 @@ impl App {
     /// render the skeleton before data is there
     fn render_skeleton(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(
-            Paragraph::new(include_str!("../etc/art.txt"))
+            Paragraph::new(include_str!("../assets/art.txt"))
                 .style(Style::default().bold().cyan())
                 .centered()
                 .block(

@@ -14,26 +14,8 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.os_name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os_name: Linux-x86_64
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            suffix: ""
-          
-          - os_name: Windows-x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            suffix: ".exe"
-            
-          - os_name: macOS-x86_64
-            os: macos-latest
-            target: x86_64-apple-darwin
-            suffix: ""
+    name: Build Linux + Windows
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -42,34 +24,39 @@ jobs:
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: "${{ matrix.target }}"
+          targets: |
+            x86_64-unknown-linux-gnu
+            x86_64-pc-windows-gnu
 
-      - name: Build Binary
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Rename Binary
-        shell: bash
+      - name: Install Windows Cross Compiler
         run: |
-          # 1. Source path (where cargo puts it)
-          SRC="target/${{ matrix.target }}/release/${{ env.BIN_NAME }}${{ matrix.suffix }}"
-          
-          # 2. Dest path (Unique name: my-app-Windows-x86_64.exe)
-          DST="${{ env.BIN_NAME }}-${{ matrix.os_name }}${{ matrix.suffix }}"
-          
-          # 3. Copy and print for debugging
-          cp "$SRC" "$DST"
-          echo "Created $DST"
+          sudo apt update
+          sudo apt install -y mingw-w64
 
-      - name: Upload Binary
+      - name: Build Linux Binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Build Windows Binary
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Rename Binaries
+        run: |
+          cp target/x86_64-unknown-linux-gnu/release/${BIN_NAME} ${BIN_NAME}-Linux-x86_64
+          cp target/x86_64-pc-windows-gnu/release/${BIN_NAME}.exe ${BIN_NAME}-Windows-x86_64.exe
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.os_name }}
-          path: ${{ env.BIN_NAME }}-${{ matrix.os_name }}${{ matrix.suffix }}
+          name: binaries
+          path: |
+            shio-Linux-x86_64
+            shio-Windows-x86_64.exe
 
   release:
     name: Publish Release
     needs: build
     runs-on: ubuntu-latest
+
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v4

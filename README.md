@@ -1,7 +1,7 @@
 <div id="top">
     <div align="center">
         <h1>Shio</h1>
-        <p>blazingly fast TUI anime browser. written in rust.</p>
+        <p>blazingly fast TUI anime browser, written in rust.</p>
         <p>inspired by ani-cli from <a href="https://github.com/pystardust/ani-cli">pystardust</a></p>
         <p>
             <img src="https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white" alt="Rust" />

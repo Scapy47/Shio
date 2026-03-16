@@ -51,7 +51,9 @@ export SHIO_PLAYER_CMD="vlc --http-user-agent='{user_agent}' --http-referrer='{r
 ```
 
 > [!NOTE]
-> `{url}` is required. `{user_agent}` and `{referer}` are only required for some hosts — but it's recommended to include them so all sources work correctly.
+> `{url}`, `{user_agent}` and `{referer}` are placeholder for values populated by shio.
+> `{url}` is url of video, while `{user_agent}` and `{referer}` are headers required for some sources/providers
+
 
 ### Installation
 

@@ -23,7 +23,7 @@
 
 ## Quick Links
 
-- [intro](#Introduction)
+- [Features](#Features)
 - [Getting started](#Getting-started)
 
 ## Features
@@ -68,5 +68,5 @@ curl -fsSL https://raw.githubusercontent.com/Scapy47/Shio/refs/heads/main/etc/se
 irm https://raw.githubusercontent.com/Scapy47/Shio/refs/heads/main/etc/setup.ps1 | iex
 ```
 <!--stackedit_data:
-eyJoaXN0b3J5IjpbMTg2Njg3Mjk0N119
+eyJoaXN0b3J5IjpbODk2MzI4NDEzLDE4NjY4NzI5NDddfQ==
 -->

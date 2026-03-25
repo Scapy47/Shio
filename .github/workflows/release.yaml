@@ -67,7 +67,7 @@ jobs:
       - name: Update Continuous Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: continuous
+          tag_name: Development_Build
           name: "Latest Development Build"
           prerelease: true
           files: artifacts/*

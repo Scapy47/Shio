@@ -27,12 +27,13 @@
 - [Getting started](#Getting-started)
 
 ## Features
-- simple and elegant TUI
-- vim keybinds `J` and `K`
-- supports sub, dub and raw audios
-- back in fourth navigation in TUI
-- no hard-coded [player](###Setup-Player)
-- no external dependency other then player (and curl maybe)
+- Search and Browse through anime
+- Vim and Emacs keybindings
+- Multi audio support
+- Bring Your Own [player](###Setup-Player) (Not Hard-coded)
+- Zero Dependency other then libc (and curl maybe)
+- Cross Platform
+- Blazingly Fast
 
 ## Getting Started
 
@@ -67,6 +68,3 @@ curl -fsSL https://raw.githubusercontent.com/Scapy47/Shio/refs/heads/main/etc/se
 ```powershell
 irm https://raw.githubusercontent.com/Scapy47/Shio/refs/heads/main/etc/setup.ps1 | iex
 ```
-<!--stackedit_data:
-eyJoaXN0b3J5IjpbODk2MzI4NDEzLDE4NjY4NzI5NDddfQ==
--->

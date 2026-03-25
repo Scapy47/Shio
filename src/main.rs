@@ -182,13 +182,13 @@ impl App {
                             return Ok(());
                         }
                         event::KeyCode::Down => self.table_state.select_next(),
-                        event::KeyCode::Char('j')
+                        event::KeyCode::Char('j') | event::KeyCode::Char('n')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
                             self.table_state.select_next()
                         }
                         event::KeyCode::Up => self.table_state.select_previous(),
-                        event::KeyCode::Char('k')
+                        event::KeyCode::Char('k') | event::KeyCode::Char('p')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
                             self.table_state.select_previous()
@@ -597,18 +597,18 @@ impl App {
             bottom,
             Line::from(vec![
                 Span::raw("move "),
-                Span::styled("Up / Down ", Style::default().bold().yellow()),
+                Span::styled("Up/Down ", Style::default().bold().yellow()),
                 Span::raw("using "),
-                Span::styled("↑ / ctrl + k ", Style::default().bold().yellow()),
+                Span::styled("↑ / ctrl+k / ctrl+p ", Style::default().bold().yellow()),
                 Span::raw("and "),
-                Span::styled("↓ / ctrl + j ", Style::default().bold().yellow()),
+                Span::styled("↓ / ctrl+j / ctrl+n ", Style::default().bold().yellow()),
                 Span::raw("keys, "),
                 Span::raw("press "),
                 Span::styled("Enter ", Style::default().bold().green()),
                 Span::raw("to "),
                 Span::styled("Select ", Style::default().bold().green()),
                 Span::raw("and "),
-                Span::styled("ctrl + ← ", Style::default().bold().cyan()),
+                Span::styled("ctrl+<BS> ", Style::default().bold().cyan()),
                 Span::raw("to go "),
                 Span::styled("Back", Style::default().bold().cyan()),
             ]),

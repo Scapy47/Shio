@@ -9,10 +9,12 @@ use ratatui::{
     layout::{Constraint, HorizontalAlignment, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, BorderType, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
+use ratatui_macros::{horizontal, line, span, vertical};
 use std::{
     env,
+    ops::Index,
     process::Command,
     sync::{Arc, mpsc},
     thread,
@@ -80,6 +82,7 @@ struct App {
     rows_to_data_index: Vec<usize>,
     table_state: TableState,
     ui_loop_tick: Instant,
+    selected_row: usize,
 }
 
 impl App {
@@ -100,6 +103,7 @@ impl App {
             view: View::Loading,
             resp: Resp::default(),
             ui_loop_tick: Instant::now(),
+            selected_row: 0,
         }
     }
 
@@ -181,17 +185,33 @@ impl App {
                         {
                             return Ok(());
                         }
-                        event::KeyCode::Down => self.table_state.select_next(),
+                        event::KeyCode::Down => {
+                            self.table_state.select_next();
+                            if let Some(row) = self.table_state.selected() {
+                                self.selected_row = row
+                            }
+                        }
                         event::KeyCode::Char('j') | event::KeyCode::Char('n')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            self.table_state.select_next()
+                            self.table_state.select_next();
+                            if let Some(row) = self.table_state.selected() {
+                                self.selected_row = row
+                            }
                         }
-                        event::KeyCode::Up => self.table_state.select_previous(),
+                        event::KeyCode::Up => {
+                            self.table_state.select_previous();
+                            if let Some(row) = self.table_state.selected() {
+                                self.selected_row = row
+                            }
+                        }
                         event::KeyCode::Char('k') | event::KeyCode::Char('p')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            self.table_state.select_previous()
+                            self.table_state.select_previous();
+                            if let Some(row) = self.table_state.selected() {
+                                self.selected_row = row
+                            }
                         }
                         event::KeyCode::Backspace | event::KeyCode::Char('h')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
@@ -550,6 +570,29 @@ impl App {
         );
     }
 
+    fn render_info_screen(&self, frame: &mut Frame, area: Rect) {
+        let [top, bottom] = vertical![==50%, *=1].areas(area);
+
+        let Some(data) = &self.resp.search else {
+            return;
+        };
+
+        let Some(data_index) = self.rows_to_data_index.get(self.selected_row) else {
+            return;
+        };
+
+        frame.render_widget(
+            Paragraph::new(line!(data[*data_index].description.as_str()))
+                .wrap(Wrap { trim: false })
+                .block(
+                    Block::bordered()
+                        .border_type(BorderType::Rounded)
+                        .style(Style::new().cyan()),
+                ),
+            bottom,
+        );
+    }
+
     fn render_footer(&self, frame: &mut Frame, area: Rect, line: Line) {
         frame.render_widget(
             Paragraph::new(line)
@@ -564,30 +607,28 @@ impl App {
     }
 
     fn render(&mut self, frame: &mut Frame) {
-        let [top, middle, bottom] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
-            Constraint::Length(3),
-        ])
-        .areas(frame.area());
+        let [top, middle, bottom] = vertical![==3, *=1, ==3].areas(frame.area());
+        let [middle_l, middle_r] = horizontal![==60%, *=1].areas(middle);
 
         self.render_search_input(frame, top);
 
+        self.render_info_screen(frame, middle_r);
+
         match self.view {
-            View::Loading => self.render_skeleton(frame, middle),
+            View::Loading => self.render_skeleton(frame, middle_l),
             View::Search => {
                 if self.resp.search.is_some() {
-                    self.render_search_result(frame, middle);
+                    self.render_search_result(frame, middle_l);
                 }
             }
             View::Episode => {
                 if self.resp.episode_list.is_some() {
-                    self.render_episode_list(frame, middle);
+                    self.render_episode_list(frame, middle_l);
                 }
             }
             View::Provider => {
                 if self.resp.episode_provider_list.is_some() {
-                    self.render_episode_providers(frame, middle);
+                    self.render_episode_providers(frame, middle_l);
                 }
             }
         }
@@ -595,23 +636,23 @@ impl App {
         self.render_footer(
             frame,
             bottom,
-            Line::from(vec![
-                Span::raw("move "),
-                Span::styled("Up/Down ", Style::default().bold().yellow()),
-                Span::raw("using "),
-                Span::styled("↑ / ctrl+k / ctrl+p ", Style::default().bold().yellow()),
-                Span::raw("and "),
-                Span::styled("↓ / ctrl+j / ctrl+n ", Style::default().bold().yellow()),
-                Span::raw("keys, "),
-                Span::raw("press "),
-                Span::styled("Enter ", Style::default().bold().green()),
-                Span::raw("to "),
-                Span::styled("Select ", Style::default().bold().green()),
-                Span::raw("and "),
-                Span::styled("ctrl+<BS> ", Style::default().bold().cyan()),
-                Span::raw("to go "),
-                Span::styled("Back", Style::default().bold().cyan()),
-            ]),
+            line![
+                "move ",
+                span!(Style::default().bold().yellow(); "Up/Down "),
+                "using ",
+                span!(Style::default().bold().yellow(); "↑ / ctrl+k / ctrl+p "),
+                "and ",
+                span!(Style::default().bold().yellow(); "↓ / ctrl+j / ctrl+n "),
+                "keys, ",
+                "press ",
+                span!(Style::default().bold().green(); "Enter "),
+                "to ",
+                span!(Style::default().bold().green(); "Select "),
+                "and ",
+                span!(Style::default().bold().cyan(); "ctrl+<BS> "),
+                "to go ",
+                span!(Style::default().bold().cyan(); "Back")
+            ],
         );
     }
 }
